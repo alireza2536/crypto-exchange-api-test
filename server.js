@@ -173,7 +173,7 @@ function normalizeContract(exchange,x) {
   if(exchange==="WEEX"){const base=x?.baseAsset||String(x?.symbol||"").replace(/USDT$/,"");return {symbol:x?.symbol,base,quote:x?.quoteAsset||"USDT",settle:x?.marginAsset||"USDT",contractType:x?.contractType||"perpetual-market-ticker",exchangeState:x?.status??null,active:typeof x?.status==="number"?x.status===1:typeof x?.status==="string"?(x.status.toUpperCase()==="TRADING"||x.status.toUpperCase()==="OPEN"):null,marketDataAvailable:Number(x?.lastPrice)>0,apiAllowed:null};}
   if(exchange==="HTX"){const parts=String(x?.contract_code||"").split("-");return {symbol:x?.contract_code,base:x?.symbol||parts[0],quote:x?.quote_asset||parts[1],settle:x?.settle_asset||parts[1],contractType:x?.contract_type||"swap",exchangeState:x?.contract_status,active:Number(x?.contract_status)===1,apiAllowed:null};}
   if(exchange==="KuCoin") return {symbol:x?.symbol,base:x?.baseCurrency==="XBT"?"BTC":x?.baseCurrency,quote:x?.quoteCurrency,settle:x?.settleCurrency,contractType:x?.type,exchangeState:x?.status??null,active:x?.status==="Open"||x?.status==="Trading"||x?.status===true,apiAllowed:null};
-  if(exchange==="XT") return {symbol:x?.s,base:x?.s?.split("_")?.[0]?.toUpperCase(),quote:x?.s?.split("_")?.[1]?.toUpperCase(),settle:x?.s?.split("_")?.[1]?.toUpperCase(),contractType:"perpetual-market-ticker",exchangeState:null,active:null,marketDataAvailable:Number(x?.c)>0,apiAllowed:null};
+  if(exchange==="XT"){const symbol=String(x?.symbol||x?.s||"");const parts=symbol.split("_");const tradeSwitch=typeof x?.tradeSwitch==="boolean"?x.tradeSwitch:null;return {symbol,base:x?.baseCoin||parts[0]?.toUpperCase()||null,quote:x?.quoteCoin||parts[1]?.toUpperCase()||null,settle:x?.settleCoin||(String(x?.underlyingType||"").toUpperCase().includes("USDT")?"USDT":parts[1]?.toUpperCase()||null),contractType:x?.contractType||x?.productType||"unknown",exchangeState:tradeSwitch===null?null:(tradeSwitch?"trading_enabled":"trading_disabled"),active:tradeSwitch,marketDataAvailable:null,apiAllowed:null};}
   return null;
 }
 function summarizeContractCatalog(exchange,j) {
@@ -199,7 +199,7 @@ const contractListProbes = [
   {exchange:"WEEX",kind:"market_symbol_list",url:"https://api-contract.weex.com/capi/v3/market/ticker/24hr",check:j=>Array.isArray(j)&&j.some(x=>x?.symbol==="BTCUSDT"&&Number(x?.lastPrice)>0),count:j=>j.length},
   {exchange:"HTX",kind:"contract_list",url:"https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",check:j=>j?.status==="ok"&&Array.isArray(j?.data)&&j.data.some(x=>x?.contract_code==="BTC-USDT"),count:j=>j.data.length},
   {exchange:"KuCoin",kind:"contract_list",url:"https://api-futures.kucoin.com/api/v1/contracts/active",check:j=>String(j?.code)==="200000"&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="XBTUSDTM"),count:j=>j.data.length},
-  {exchange:"XT",kind:"market_symbol_list",url:"https://fapi.xt.com/future/market/v1/public/q/tickers",check:j=>j?.returnCode===0&&Array.isArray(j?.result)&&j.result.some(x=>x?.s==="btc_usdt"),count:j=>j.result.length}
+  {exchange:"XT",kind:"contract_list",url:"https://fapi.xt.com/future/market/v1/public/symbol/list",check:j=>j?.returnCode===0&&Array.isArray(j?.result)&&j.result.some(x=>String(x?.symbol||"").toLowerCase()==="btc_usdt"),count:j=>j.result.length}
 ];
 const symbolCoverageProbes = [];
 const symbolPairs = {
