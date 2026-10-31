@@ -180,7 +180,6 @@ const contractListProbes = [
   {exchange:"KuCoin",kind:"contract_list",url:"https://api-futures.kucoin.com/api/v1/contracts/active",check:j=>String(j?.code)==="200000"&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="XBTUSDTM"),count:j=>j.data.length},
   {exchange:"XT",kind:"market_symbol_list",url:"https://fapi.xt.com/future/market/v1/public/q/tickers",check:j=>j?.returnCode===0&&Array.isArray(j?.result)&&j.result.some(x=>x?.s==="btc_usdt"),count:j=>j.result.length}
 ];
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...symbolCoverageProbes];
 const symbolCoverageProbes = [];
 const symbolPairs = {
   MEXC:[["BTC","BTC_USDT"],["ETH","ETH_USDT"],["SOL","SOL_USDT"]],
@@ -200,9 +199,10 @@ for(const [exchange,pairs] of Object.entries(symbolPairs)) for(const [base,symbo
   if(exchange==="HTX") url=`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${symbol}&period=15min&size=3`;
   if(exchange==="KuCoin") url=`https://api.kucoin.com/api/ua/v2/market/kline?symbol=${symbol}&tradeType=FUTURES&klineType=TRADE&interval=15min`;
   if(exchange==="XT") url=`https://fapi.xt.com/future/market/v1/public/q/kline?symbol=${symbol}&interval=15m&limit=3`;
-  symbolCoverageProbes.push({exchange,kind:"symbol_coverage_15m",symbol:base,timeframe:"15m",url,check:j=>candleShapeOk(exchange,j)});
+  symbolCoverageProbes.push({exchange,kind:"candles_15m_symbol_coverage",symbol:base,timeframe:"15m",url,check:j=>candleShapeOk(exchange,j)});
 }
 
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...symbolCoverageProbes];
 async function runDeepProbe(probe) {
   const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try {
