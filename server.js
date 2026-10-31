@@ -63,6 +63,74 @@ const dataProbes = [
   { exchange:"XT", kind:"open_interest", url:"https://fapi.xt.com/future/market/v1/public/contract/open-interest?symbol=btc_usdt", check:j=>j?.returnCode===0 && j?.result && Number(j.result.openInterest??j.result.openInterestUsd)>0 },
 ];
 
+const timeframeMinutes = {"15m":15,"1h":60,"2h":120,"4h":240,"1d":1440};
+function candleTimestamp(exchange,j) {
+  let values=[];
+  if(exchange==="MEXC") values=j?.data?.time||[];
+  else if(exchange==="BingX") values=(j?.data||[]).map(x=>x?.time);
+  else if(exchange==="OKX") values=(j?.data||[]).map(x=>x?.[0]);
+  else if(exchange==="WEEX") values=(Array.isArray(j)?j:[]).map(x=>x?.[0]);
+  else if(exchange==="HTX") values=(j?.data||[]).map(x=>x?.id);
+  else if(exchange==="KuCoin") values=(j?.data?.list||[]).map(x=>x?.[0]);
+  else if(exchange==="XT") values=(j?.result||[]).map(x=>x?.t);
+  const nums=values.map(Number).filter(Number.isFinite);
+  if(!nums.length) return null;
+  const latest=Math.max(...nums);
+  return latest < 100000000000 ? latest*1000 : latest;
+}
+function candleShapeOk(exchange,j) {
+  if(exchange==="MEXC") return j?.success===true && j?.code===0 && Array.isArray(j?.data?.time) && j.data.time.length>0 && Array.isArray(j.data.close) && j.data.close.length===j.data.time.length && Number(j.data.close[j.data.close.length-1])>0;
+  if(exchange==="BingX") return (j?.code===0||j?.code==="0") && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.close)>0;
+  if(exchange==="OKX") return String(j?.code)==="0" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.[4])>0;
+  if(exchange==="WEEX") return Array.isArray(j) && j.length>0 && Number(j[0]?.[4])>0;
+  if(exchange==="HTX") return j?.status==="ok" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.close)>0;
+  if(exchange==="KuCoin") return String(j?.code)==="200000" && Array.isArray(j?.data?.list) && j.data.list.length>0 && Number(j.data.list[0]?.[4])>0;
+  if(exchange==="XT") return j?.returnCode===0 && Array.isArray(j?.result) && j.result.length>0 && Number(j.result[0]?.c)>0;
+  return false;
+}
+const deepProbes = [];
+const timeframeSpecs = [
+  {exchange:"MEXC", values:{"1h":"Min60","4h":"Hour4","1d":"Day1"}, url:v=>`https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=${v}`},
+  {exchange:"BingX", values:{"1h":"1h","2h":"2h","4h":"4h","1d":"1d"}, url:v=>`https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=${v}&limit=3`},
+  {exchange:"OKX", values:{"1h":"1H","2h":"2H","4h":"4H","1d":"1D"}, url:v=>`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=${v}&limit=3`},
+  {exchange:"WEEX", values:{"1h":"1h","4h":"4h","1d":"1d"}, url:v=>`https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=${v}&limit=3`},
+  {exchange:"HTX", values:{"1h":"60min","4h":"4hour","1d":"1day"}, url:v=>`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=${v}&size=3`},
+  {exchange:"KuCoin", values:{"1h":"1hour","2h":"2hour","4h":"4hour","1d":"1day"}, url:v=>`https://api.kucoin.com/api/ua/v2/market/kline?symbol=XBTUSDTM&tradeType=FUTURES&klineType=TRADE&interval=${v}`},
+  {exchange:"XT", values:{"1h":"1h","4h":"4h","1d":"1d"}, url:v=>`https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=${v}&limit=3`}
+];
+for(const spec of timeframeSpecs) for(const [tf,value] of Object.entries(spec.values)) deepProbes.push({exchange:spec.exchange,kind:`candles_${tf}`,timeframe:tf,url:spec.url(value),check:j=>candleShapeOk(spec.exchange,j)});
+const fundingProbes = [
+  {exchange:"MEXC",kind:"funding_rate",url:"https://contract.mexc.com/api/v1/contract/ticker",check:j=>j?.success===true&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"&&Number.isFinite(Number(x.fundingRate)))},
+  {exchange:"BingX",kind:"funding_rate",url:"https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex?symbol=BTC-USDT",check:j=>(j?.code===0||j?.code==="0")&&j?.data&&Number.isFinite(Number(Array.isArray(j.data)?j.data[0]?.lastFundingRate:j.data.lastFundingRate))},
+  {exchange:"OKX",kind:"funding_rate",url:"https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP",check:j=>String(j?.code)==="0"&&Array.isArray(j?.data)&&Number.isFinite(Number(j.data[0]?.fundingRate))},
+  {exchange:"WEEX",kind:"funding_rate",url:"https://api-contract.weex.com/capi/v3/market/premiumIndex?symbol=BTCUSDT",check:j=>Array.isArray(j)&&j.some(x=>x?.symbol==="BTCUSDT"&&Number.isFinite(Number(x.lastFundingRate))&&Number.isFinite(Number(x.forecastFundingRate)))},
+  {exchange:"HTX",kind:"funding_rate",url:"https://api.hbdm.com/linear-swap-api/v1/swap_funding_rate?contract_code=BTC-USDT",check:j=>j?.status==="ok"&&Array.isArray(j?.data)&&j.data.some(x=>Number.isFinite(Number(x?.funding_rate??x?.fundingRate)))},
+  {exchange:"KuCoin",kind:"funding_rate",url:"https://api-futures.kucoin.com/api/v1/funding-rate/XBTUSDTM/current",check:j=>String(j?.code)==="200000"&&j?.data&&Number.isFinite(Number(j.data.value))},
+  {exchange:"XT",kind:"funding_rate",url:"https://fapi.xt.com/future/market/v1/public/q/funding-rate?symbol=btc_usdt",check:j=>j?.returnCode===0&&Array.isArray(j?.result?.items)&&j.result.items.some(x=>Number.isFinite(Number(x?.fundingRate)))}
+];
+const allDeepProbes=[...deepProbes,...fundingProbes];
+async function runDeepProbe(probe) {
+  const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+  try {
+    const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
+    const raw=await response.text();let json;try{json=JSON.parse(raw)}catch{json=null}
+    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null;
+    if(probe.kind.startsWith("candles_")&&schemaOk){
+      latestCandleAt=candleTimestamp(probe.exchange,json);
+      ageMs=latestCandleAt===null?null:Date.now()-latestCandleAt;
+      const maxAge=timeframeMinutes[probe.timeframe]*60*1000*2+5*60*1000;
+      fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
+      schemaOk=schemaOk&&fresh;
+    }
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+  }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
+  finally{clearTimeout(timer)}
+}
+async function runDeepSweep(){
+  const results=await Promise.all(allDeepProbes.map(runDeepProbe));
+  return {finishedAt:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results};
+}
+
 async function runDataProbe(probe) {
   const started=Date.now(), controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try {
@@ -144,13 +212,15 @@ small{color:#94a3b8;word-break:break-all}.summary{margin-top:16px}
 <body><main>
 <h1>تست اتصال API هفت صرافی فیوچرز</h1>
 <p>این ابزار فقط درخواست‌های عمومی GET می‌فرستد؛ کلید API یا اطلاعات حساب لازم نیست. هر هفت تست هم‌زمان اجرا می‌شوند.</p>
-<button id="run">اجرای تست تیکر هر ۷ صرافی</button>\n<button id="dataRun" style="margin-right:8px;background:#0f766e">تست کندل و Open Interest</button>\n<pre id="dataSummary" style="white-space:pre-wrap;overflow-wrap:anywhere;color:#cbd5e1;background:#111c2e;padding:12px;border-radius:10px;margin-top:14px">تست تکمیلی داده‌ها هنوز اجرا نشده است.</pre>
+<button id="run">اجرای تست تیکر هر ۷ صرافی</button>\n<button id="dataRun" style="margin-right:8px;background:#0f766e">تست کندل و Open Interest</button>\n<button id="deepRun" style="margin-right:8px;background:#7c3aed">تست تایم‌فریم‌ها و Funding</button>\n<pre id="dataSummary" style="white-space:pre-wrap;overflow-wrap:anywhere;color:#cbd5e1;background:#111c2e;padding:12px;border-radius:10px;margin-top:14px">تست تکمیلی داده‌ها هنوز اجرا نشده است.</pre>
 <div class="summary" id="summary">هنوز تستی اجرا نشده است.</div>
 <table><thead><tr><th>صرافی</th><th>نتیجه</th><th>HTTP</th><th>زمان (ms)</th><th>جزئیات</th></tr></thead><tbody id="rows"></tbody></table>
 <p><small>PASS یعنی پاسخ HTTP موفق و ساختار پایه پاسخ قابل تشخیص بوده است؛ این تست به‌تنهایی تضمین‌کننده پایداری یا پوشش کامل بازار نیست.</small></p>
 </main>
 <script>
-const btn=document.getElementById('run'), rows=document.getElementById('rows'), summary=document.getElementById('summary');\nconst dataBtn=document.getElementById('dataRun'), dataSummary=document.getElementById('dataSummary');\ndataBtn.addEventListener('click',async()=>{dataBtn.disabled=true;dataBtn.textContent='در حال تست داده‌ها...';dataSummary.textContent='در حال بررسی کندل ۱۵ دقیقه و Open Interest در صرافی‌ها...';try{const r=await fetch('/api/data-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();dataSummary.textContent='موفق: '+b.passed+' از '+b.total+'\\n'+b.results.map(x=>x.exchange+' | '+x.kind+' | '+x.status+' | '+x.latencyMs+'ms'+(x.error?' | '+x.error:'')).join('\\n')+'\\n\\nجزئیات JSON در /api/data-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{dataBtn.disabled=false;dataBtn.textContent='اجرای دوباره تست داده‌ها'}});
+const btn=document.getElementById('run'), rows=document.getElementById('rows'), summary=document.getElementById('summary');\nconst dataBtn=document.getElementById('dataRun'), dataSummary=document.getElementById('dataSummary');\nconst deepBtn=document.getElementById('deepRun');
+deepBtn.addEventListener('click',async()=>{deepBtn.disabled=true;deepBtn.textContent='در حال تست عمیق...';dataSummary.textContent='در حال بررسی تایم‌فریم‌های ۱ساعت، ۲ساعت، ۴ساعت، روزانه و Funding...';try{const r=await fetch('/api/deep-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();dataSummary.textContent='موفق: '+b.passed+' از '+b.total+'\\n'+b.results.map(x=>x.exchange+' | '+x.kind+' | '+x.status+' | '+x.latencyMs+'ms'+(x.candleAgeMinutes!==null&&x.candleAgeMinutes!==undefined?' | age '+x.candleAgeMinutes+'m':'')+(x.error?' | '+x.error:'')).join('\\n')+'\\n\\nجزئیات کامل: /api/deep-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{deepBtn.disabled=false;deepBtn.textContent='اجرای دوباره تست تایم‌فریم‌ها و Funding'}});
+dataBtn.addEventListener('click',async()=>{dataBtn.disabled=true;dataBtn.textContent='در حال تست داده‌ها...';dataSummary.textContent='در حال بررسی کندل ۱۵ دقیقه و Open Interest در صرافی‌ها...';try{const r=await fetch('/api/data-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();dataSummary.textContent='موفق: '+b.passed+' از '+b.total+'\\n'+b.results.map(x=>x.exchange+' | '+x.kind+' | '+x.status+' | '+x.latencyMs+'ms'+(x.error?' | '+x.error:'')).join('\\n')+'\\n\\nجزئیات JSON در /api/data-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{dataBtn.disabled=false;dataBtn.textContent='اجرای دوباره تست داده‌ها'}});
 btn.addEventListener('click',async()=>{
  btn.disabled=true;btn.textContent='در حال آزمایش...';summary.textContent='درخواست‌ها به‌صورت هم‌زمان ارسال شدند.';
  try{
@@ -180,6 +250,11 @@ const server = http.createServer(async (req, res) => {
     const passed = results.filter((x) => x.status === "PASS").length;
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     return res.end(JSON.stringify({ finishedAt: new Date().toISOString(), passed, total: results.length, results }));
+  }
+  if (url.pathname === "/api/deep-test") {
+    const body = await runDeepSweep();
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    return res.end(JSON.stringify(body));
   }
   if (url.pathname === "/api/test") {
     const results = await Promise.all(probes.map(runProbe));
