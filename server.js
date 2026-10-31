@@ -6,7 +6,7 @@ const TIMEOUT_MS = 15000;
 const probes = [
   {
     exchange: "MEXC",
-    url: "https://contract.mexc.com/api/v1/contract/ticker",
+    url: "https://api.mexc.com/api/v1/contract/ticker",
     benchmark: "BTC_USDT",
     check: (j) => j && (j.success === true || j.code === 0) && (Array.isArray(j.data) ? j.data.some((x) => x?.symbol === "BTC_USDT" && Number(x.lastPrice) > 0) : (j.data && j.data.symbol === "BTC_USDT" && Number(j.data.lastPrice) > 0)),
   },
@@ -48,7 +48,7 @@ const probes = [
 
 
 const dataProbes = [
-  { exchange:"MEXC", kind:"candles_15m", url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min15", check:j=>j?.success===true && j?.code===0 && (Array.isArray(j?.data?.time) ? j.data.time.length>0 && Array.isArray(j.data.close) && Number(j.data.close[j.data.close.length-1])>0 : Array.isArray(j?.data) && j.data.length>0) },
+  { exchange:"MEXC", kind:"candles_15m", url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min15", check:j=>j?.success===true && j?.code===0 && (Array.isArray(j?.data?.time) ? j.data.time.length>0 && Array.isArray(j.data.close) && Number(j.data.close[j.data.close.length-1])>0 : Array.isArray(j?.data) && j.data.length>0) },
   { exchange:"BingX", kind:"candles_15m", url:"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=15m&limit=3", check:j=>(j?.code===0||j?.code==="0") && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.close)>0 },
   { exchange:"BingX", kind:"open_interest", url:"https://open-api.bingx.com/openApi/swap/v2/quote/openInterest?symbol=BTC-USDT", check:j=>(j?.code===0||j?.code==="0") && j?.data && Number(j.data.openInterest)>0 },
   { exchange:"OKX", kind:"candles_15m", url:"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=15m&limit=3", check:j=>String(j?.code)==="0" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.[4])>0 },
@@ -90,7 +90,7 @@ function candleShapeOk(exchange,j) {
 }
 const deepProbes = [];
 const timeframeSpecs = [
-  {exchange:"MEXC", values:{"1h":"Min60","4h":"Hour4","1d":"Day1"}, url:v=>`https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=${v}`},
+  {exchange:"MEXC", values:{"1h":"Min60","4h":"Hour4","1d":"Day1"}, url:v=>`https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=${v}`},
   {exchange:"BingX", values:{"1h":"1h","2h":"2h","4h":"4h","1d":"1d"}, url:v=>`https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=${v}&limit=3`},
   {exchange:"OKX", values:{"1h":"1H","2h":"2H","4h":"4H","1d":"1Dutc"}, url:v=>`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=${v}&limit=3`},
   {exchange:"WEEX", values:{"1h":"1h","4h":"4h","1d":"1d"}, url:v=>`https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=${v}&limit=3`},
@@ -124,7 +124,7 @@ function buildSynthetic2h(exchange,j) {
   return null;
 }
 const fundingProbes = [
-  {exchange:"MEXC",kind:"funding_rate",url:"https://contract.mexc.com/api/v1/contract/ticker",check:j=>j?.success===true&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"&&Number.isFinite(Number(x.fundingRate)))},
+  {exchange:"MEXC",kind:"funding_rate",url:"https://api.mexc.com/api/v1/contract/ticker",check:j=>j?.success===true&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"&&Number.isFinite(Number(x.fundingRate)))},
   {exchange:"BingX",kind:"funding_rate",url:"https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex?symbol=BTC-USDT",check:j=>(j?.code===0||j?.code==="0")&&j?.data&&Number.isFinite(Number(Array.isArray(j.data)?j.data[0]?.lastFundingRate:j.data.lastFundingRate))},
   {exchange:"OKX",kind:"funding_rate",url:"https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP",check:j=>String(j?.code)==="0"&&Array.isArray(j?.data)&&Number.isFinite(Number(j.data[0]?.fundingRate))},
   {exchange:"WEEX",kind:"funding_rate",url:"https://api-contract.weex.com/capi/v3/market/premiumIndex?symbol=BTCUSDT",check:j=>Array.isArray(j)&&j.some(x=>x?.symbol==="BTCUSDT"&&Number.isFinite(Number(x.lastFundingRate))&&Number.isFinite(Number(x.forecastFundingRate)))},
@@ -153,7 +153,7 @@ const utcDailyProbes=[
   {exchange:"HTX",kind:"synthetic_1d_utc",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=30",check:j=>Boolean(buildSynthetic1dUtc("HTX",j))}
 ];
 const synthetic2hProbes = [
-  {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
+  {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
   {exchange:"WEEX",kind:"synthetic_2h",check:j=>true,url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
   {exchange:"HTX",kind:"synthetic_2h",check:j=>true,url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=10"},
   {exchange:"XT",kind:"synthetic_2h",check:j=>true,url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1h&limit=10"}
@@ -194,7 +194,7 @@ function summarizeContractCatalog(exchange,j) {
   return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
-  {exchange:"MEXC",kind:"contract_list",url:"https://contract.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
+  {exchange:"MEXC",kind:"contract_list",url:"https://api.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
   {exchange:"BingX",kind:"contract_list",url:"https://open-api.bingx.com/openApi/swap/v2/quote/contracts",check:j=>(j?.code===0||j?.code==="0")&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC-USDT"),count:j=>j.data.length},
   {exchange:"OKX",kind:"contract_list",url:"https://www.okx.com/api/v5/public/instruments?instType=SWAP",check:j=>String(j?.code)==="0"&&Array.isArray(j?.data)&&j.data.some(x=>x?.instId==="BTC-USDT-SWAP"),count:j=>j.data.length},
   {exchange:"WEEX",kind:"contract_list",url:"https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",check:j=>Array.isArray(j?.symbols)&&j.symbols.some(x=>x?.symbol==="BTCUSDT"&&x?.contractType==="PERPETUAL"),count:j=>j.symbols.length},
@@ -215,7 +215,7 @@ const symbolPairs = {
 };
 for(const [exchange,pairs] of Object.entries(symbolPairs)) for(const [base,symbol] of pairs){
   let url="";
-  if(exchange==="MEXC") url=`https://contract.mexc.com/api/v1/contract/kline/${symbol}?interval=Min15`;
+  if(exchange==="MEXC") url=`https://api.mexc.com/api/v1/contract/kline/${symbol}?interval=Min15`;
   if(exchange==="BingX") url=`https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=${symbol}&interval=15m&limit=3`;
   if(exchange==="OKX") url=`https://www.okx.com/api/v5/market/candles?instId=${symbol}&bar=15m&limit=3`;
   if(exchange==="WEEX") url=`https://api-contract.weex.com/capi/v3/market/klines?symbol=${symbol}&interval=15m&limit=3`;
@@ -304,7 +304,7 @@ async function fetchJsonWithRetry(url){
 }
 async function runHypeSymbolProbe(exchange){
   const specs={
-    MEXC:{catalog:"https://contract.mexc.com/api/v1/contract/detail",symbol:"HYPE_USDT",find:j=>(j?.data||[]).find(x=>x?.symbol==="HYPE_USDT"),active:x=>Number(x?.state)===0,candle:"https://contract.mexc.com/api/v1/contract/kline/HYPE_USDT?interval=Min15"},
+    MEXC:{catalog:"https://api.mexc.com/api/v1/contract/detail",symbol:"HYPE_USDT",find:j=>(j?.data||[]).find(x=>x?.symbol==="HYPE_USDT"),active:x=>Number(x?.state)===0,candle:"https://api.mexc.com/api/v1/contract/kline/HYPE_USDT?interval=Min15"},
     OKX:{catalog:"https://www.okx.com/api/v5/public/instruments?instType=SWAP",symbol:"HYPE-USDT-SWAP",find:j=>(j?.data||[]).find(x=>x?.instId==="HYPE-USDT-SWAP"),active:x=>x?.state==="live",candle:"https://www.okx.com/api/v5/market/candles?instId=HYPE-USDT-SWAP&bar=15m&limit=3"}
   };
   const spec=specs[exchange],started=Date.now();
@@ -321,7 +321,7 @@ async function runHypeSymbolProbe(exchange){
     const fresh=age!==null&&age>=-120000&&age<=35*60000;
     let oiAvailable=false,fundingAvailable=false,oiValue=null,fundingRate=null,marketDataError=null;
     if(exchange==="MEXC"){
-      const ticker=await fetchJsonWithRetry("https://contract.mexc.com/api/v1/contract/ticker");
+      const ticker=await fetchJsonWithRetry("https://api.mexc.com/api/v1/contract/ticker");
       const row=(ticker.json?.data||[]).find(x=>x?.symbol==="HYPE_USDT");
       oiValue=Number(row?.holdVol);fundingRate=Number(row?.fundingRate);
       oiAvailable=ticker.response?.ok&&Number.isFinite(oiValue)&&oiValue>0;
