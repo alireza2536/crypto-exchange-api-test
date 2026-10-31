@@ -7,7 +7,7 @@ const probes = [
   {
     exchange: "MEXC",
     url: "https://contract.mexc.com/api/v1/contract/ticker",
-    check: (j) => j && (j.success === true || j.code === 0) && (Array.isArray(j.data) || (j.data && typeof j.data === "object")),
+    check: (j) => j && (j.success === true || j.code === 0) && (Array.isArray(j.data) ? j.data.some((x) => x && typeof x.symbol === "string" && (typeof x.lastPrice === "number" || typeof x.lastPrice === "string")) : (j.data && typeof j.data === "object" && typeof j.data.symbol === "string" && (typeof j.data.lastPrice === "number" || typeof j.data.lastPrice === "string"))),
   },
   {
     exchange: "BingX",
@@ -17,7 +17,7 @@ const probes = [
   {
     exchange: "OKX",
     url: "https://www.okx.com/api/v5/market/tickers?instType=SWAP",
-    check: (j) => j && String(j.code) === "0" && Array.isArray(j.data),
+    check: (j) => j && String(j.code) === "0" && Array.isArray(j.data) && j.data.length > 0 && typeof j.data[0].instId === "string" && (typeof j.data[0].last === "string" || typeof j.data[0].last === "number"),
   },
   {
     exchange: "WEEX",
@@ -27,7 +27,7 @@ const probes = [
   {
     exchange: "HTX",
     url: "https://api.hbdm.com/linear-swap-ex/market/detail/merged?contract_code=BTC-USDT",
-    check: (j) => j && j.status === "ok" && j.tick !== undefined,
+    check: (j) => j && j.status === "ok" && j.tick && (typeof j.tick.close === "number" || typeof j.tick.close === "string"),
   },
   {
     exchange: "KuCoin",
