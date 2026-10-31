@@ -1,7 +1,7 @@
 import http from "node:http";
 
 const PORT = Number(process.env.PORT || 3000);
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 15000;
 
 const probes = [
   {
@@ -12,7 +12,7 @@ const probes = [
   {
     exchange: "BingX",
     url: "https://open-api.bingx.com/openApi/swap/v2/quote/ticker",
-    check: (j) => j && (j.code === 0 || j.code === "0") && j.data !== undefined,
+    check: (j) => j && (j.code === 0 || j.code === "0") && (Array.isArray(j.data) || (j.data && typeof j.data === "object" && (typeof j.data.lastPrice === "string" || typeof j.data.lastPrice === "number" || Array.isArray(j.data)))),
   },
   {
     exchange: "OKX",
@@ -22,7 +22,7 @@ const probes = [
   {
     exchange: "WEEX",
     url: "https://api-contract.weex.com/capi/v3/market/ticker/24hr?symbol=BTCUSDT",
-    check: (j) => j && (j.code === 0 || j.code === "0" || Array.isArray(j) || typeof j.lastPrice === "string" || typeof j.last === "string"),
+    check: (j) => Array.isArray(j) && j.some((x) => x && x.symbol === "BTCUSDT" && (typeof x.lastPrice === "string" || typeof x.lastPrice === "number")),
   },
   {
     exchange: "HTX",
@@ -32,12 +32,12 @@ const probes = [
   {
     exchange: "KuCoin",
     url: "https://api-futures.kucoin.com/api/v1/allTickers",
-    check: (j) => j && String(j.code) === "200000" && j.data !== undefined,
+    check: (j) => j && String(j.code) === "200000" && Array.isArray(j.data) && j.data.length > 0 && typeof j.data[0].symbol === "string" && (typeof j.data[0].price === "string" || typeof j.data[0].price === "number"),
   },
   {
     exchange: "XT",
-    url: "https://fapi.xt.com/future/market/v1/public/ticker?symbol=btc_usdt",
-    check: (j) => j && (j.rc === 0 || j.rc === "0" || j.code === 0 || j.code === "0" || j.result !== undefined || j.data !== undefined),
+    url: "https://fapi.xt.com/future/market/v1/public/q/tickers",
+    check: (j) => j && j.returnCode === 0 && Array.isArray(j.result) && j.result.length > 0 && typeof j.result[0].s === "string" && (typeof j.result[0].c === "string" || typeof j.result[0].c === "number"),
   },
 ];
 
@@ -55,14 +55,19 @@ async function runProbe(probe) {
     let json;
     try { json = JSON.parse(raw); } catch { json = null; }
     const schemaOk = Boolean(json && probe.check(json));
+    const apiCode = json?.code ?? json?.returnCode ?? json?.error?.code ?? null;
+    const contentType = response.headers.get("content-type");
     return {
       exchange: probe.exchange,
       status: response.ok && schemaOk ? "PASS" : "FAIL",
       httpStatus: response.status,
       latencyMs: Date.now() - started,
       schemaOk,
-      preview: raw.slice(0, 260),
-      error: !response.ok ? `HTTP ${response.status}` : (!json ? "Response was not valid JSON" : (!schemaOk ? "Unexpected response structure or API-level error" : null)),
+      apiCode,
+      contentType,
+      responseBytes: Buffer.byteLength(raw),
+      preview: raw.slice(0, 360),
+      error: !response.ok ? `HTTP ${response.status}` : (!json ? "پاسخ JSON معتبر نیست" : (!schemaOk ? "ساختار پاسخ با قالب رسمی مورد انتظار مطابقت ندارد" : null)),
       endpoint: probe.url,
     };
   } catch (error) {
@@ -72,6 +77,9 @@ async function runProbe(probe) {
       httpStatus: null,
       latencyMs: Date.now() - started,
       schemaOk: false,
+      apiCode: null,
+      contentType: null,
+      responseBytes: 0,
       preview: "",
       error: error.name === "AbortError" ? `Timeout after ${TIMEOUT_MS} ms` : String(error.message || error),
       endpoint: probe.url,
@@ -108,8 +116,8 @@ const btn=document.getElementById('run'), rows=document.getElementById('rows'), 
 btn.addEventListener('click',async()=>{
  btn.disabled=true;btn.textContent='در حال آزمایش...';summary.textContent='درخواست‌ها به‌صورت هم‌زمان ارسال شدند.';
  try{
-  const response=await fetch('/api/test'); const body=await response.json();
-  rows.innerHTML=body.results.map(r=>'<tr><td>'+r.exchange+'</td><td class="'+(r.status==='PASS'?'pass':'fail')+'">'+r.status+'</td><td>'+(r.httpStatus??'—')+'</td><td>'+r.latencyMs+'</td><td>'+(r.error||'پاسخ معتبر')+'<br><small>'+r.preview.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))+'</small></td></tr>').join('');
+  const response=await fetch('/api/test',{cache:'no-store'}); if(!response.ok) throw new Error('HTTP '+response.status); const body=await response.json();
+  rows.innerHTML=body.results.map(r=>'<tr><td>'+r.exchange+'</td><td class="'+(r.status==='PASS'?'pass':'fail')+'">'+r.status+'</td><td>'+(r.httpStatus??'—')+'</td><td>'+r.latencyMs+'</td><td>'+(r.error||'پاسخ معتبر')+'<br><small>API: '+(r.apiCode??'—')+' | '+(r.contentType??'بدون Content-Type')+'<br>'+r.endpoint+'<br>'+r.preview.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))+'</small></td></tr>').join('');
   summary.textContent='موفق: '+body.passed+' از ۷ | ناموفق: '+(7-body.passed)+' | زمان پایان: '+new Date(body.finishedAt).toLocaleString();
  }catch(e){summary.textContent='خطا در اجرای تست: '+e.message}
  finally{btn.disabled=false;btn.textContent='اجرای دوباره تست'}
