@@ -599,7 +599,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("access-control-allow-origin", "*");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    return res.end(JSON.stringify({ ok: true, service: "exchange-api-connectivity-test" }));
+    return res.end(JSON.stringify({ ok: true, service: "exchange-api-connectivity-test", openInterestHistory: { configured: Boolean(oiSnapshotPool), databaseReady: oiSnapshotDbReady, collectorIntervalMinutes: OI_SNAPSHOT_INTERVAL_MS / 60000, note: oiSnapshotPool ? (oiSnapshotDbReady ? "Persistent snapshots enabled" : "Database configured but not ready") : "DATABASE_URL is not configured; historical snapshots are disabled" } }));
   }
 
   if (url.pathname === "/api/open-interest-status") {
