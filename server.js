@@ -225,14 +225,29 @@ for(const [exchange,pairs] of Object.entries(symbolPairs)) for(const [base,symbo
   symbolCoverageProbes.push({exchange,kind:"candles_15m_symbol_coverage",symbol:base,timeframe:"15m",url,check:j=>candleShapeOk(exchange,j)});
 }
 
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...utcDailyProbes,...symbolCoverageProbes];
+function oiHistoryTimestamp(exchange,j) {
+  let raw=null;
+  if(exchange==="OKX") raw=j?.data?.[0]?.[0];
+  if(exchange==="HTX") raw=j?.data?.tick?.[0]?.ts;
+  if(exchange==="KuCoin") raw=j?.data?.[0]?.ts;
+  const n=Number(raw);
+  if(!Number.isFinite(n))return null;
+  return n<100000000000?n*1000:n;
+}
+const oiHistoryProbes=[
+  {exchange:"OKX",kind:"open_interest_history_15m",timeframe:"15m",url:"https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId=BTC-USDT-SWAP&period=15m&limit=3",check:j=>String(j?.code)==="0"&&Array.isArray(j?.data)&&j.data.length>0&&Number(j.data[0]?.[1])>0},
+  {exchange:"HTX",kind:"open_interest_history_1h",timeframe:"1h",url:"https://api.hbdm.com/linear-swap-api/v1/swap_his_open_interest?contract_code=BTC-USDT&period=60min&amount_type=1&size=3",check:j=>j?.status==="ok"&&Array.isArray(j?.data?.tick)&&j.data.tick.length>0&&Number(j.data.tick[0]?.volume)>0},
+  {exchange:"KuCoin",kind:"open_interest_history_15m",timeframe:"15m",url:"https://api.kucoin.com/api/ua/v2/market/open-interest?symbol=XBTUSDTM&interval=15min&pageSize=3",check:j=>String(j?.code)==="200000"&&Array.isArray(j?.data)&&j.data.length>0&&Number(j.data[0]?.openInterest)>0}
+];
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...utcDailyProbes,...symbolCoverageProbes,...oiHistoryProbes];
 async function runDeepProbe(probe) {
   const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try {
     const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
     const raw=await response.text();let json;try{json=JSON.parse(raw)}catch{json=null}
-    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null,synthetic1dUtc=null;
+    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null,synthetic1dUtc=null,oiHistoryAt=null,oiHistoryAgeMinutes=null,oiHistoryFresh=null;
     if(probe.kind==="synthetic_1d_utc"&&json){synthetic1dUtc=buildSynthetic1dUtc(probe.exchange,json);schemaOk=Boolean(synthetic1dUtc);}
+    if(probe.kind.startsWith("open_interest_history_")&&json&&schemaOk){oiHistoryAt=oiHistoryTimestamp(probe.exchange,json);const age=oiHistoryAt===null?null:Date.now()-oiHistoryAt;oiHistoryAgeMinutes=age===null?null:Math.round(age/60000);const maxAge=(timeframeMinutes[probe.timeframe]||60)*60000*2+300000;oiHistoryFresh=age!==null&&age>=-120000&&age<=maxAge;schemaOk=schemaOk&&oiHistoryFresh;}
     if(probe.kind==="synthetic_2h"&&json){synthetic2h=buildSynthetic2h(probe.exchange,json);schemaOk=Boolean(synthetic2h);}
     if(probe.kind.startsWith("candles_")&&schemaOk){
       latestCandleAt=candleTimestamp(probe.exchange,json);
@@ -241,7 +256,7 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   finally{clearTimeout(timer)}
 }
