@@ -319,7 +319,26 @@ async function runHypeSymbolProbe(exchange){
     const stamp=valid?candleTimestamp(exchange,candles.json):null;
     const age=stamp===null?null:Date.now()-stamp;
     const fresh=age!==null&&age>=-120000&&age<=35*60000;
-    return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:valid&&fresh?"PASS":"FAIL",httpStatus:candles.response?.status??null,retryCount:catalog.retryCount+candles.retryCount,catalogCount:Array.isArray(catalog.json.data)?catalog.json.data.length:0,latestCandleAt:stamp?new Date(stamp).toISOString():null,candleAgeMinutes:age===null?null:Math.round(age/60000),fresh,catalogEndpoint:spec.catalog,candleEndpoint:spec.candle,error:!candles.response?.ok?`HTTP ${candles.response.status}`:!valid?"15m candle response invalid":!fresh?"15m candle is stale":null,latencyMs:Date.now()-started};
+    let oiAvailable=false,fundingAvailable=false,oiValue=null,fundingRate=null,marketDataError=null;
+    if(exchange==="MEXC"){
+      const ticker=await fetchJsonWithRetry("https://contract.mexc.com/api/v1/contract/ticker");
+      const row=(ticker.json?.data||[]).find(x=>x?.symbol==="HYPE_USDT");
+      oiValue=Number(row?.holdVol);fundingRate=Number(row?.fundingRate);
+      oiAvailable=ticker.response?.ok&&Number.isFinite(oiValue)&&oiValue>0;
+      fundingAvailable=ticker.response?.ok&&Number.isFinite(fundingRate);
+      if(!ticker.response?.ok)marketDataError="MEXC HYPE ticker request failed";
+    }else{
+      const [oi,funding]=await Promise.all([
+        fetchJsonWithRetry("https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId=HYPE-USDT-SWAP"),
+        fetchJsonWithRetry("https://www.okx.com/api/v5/public/funding-rate?instId=HYPE-USDT-SWAP")
+      ]);
+      oiValue=Number(oi.json?.data?.[0]?.oi);fundingRate=Number(funding.json?.data?.[0]?.fundingRate);
+      oiAvailable=oi.response?.ok&&String(oi.json?.code)==="0"&&Number.isFinite(oiValue)&&oiValue>0;
+      fundingAvailable=funding.response?.ok&&String(funding.json?.code)==="0"&&Number.isFinite(fundingRate);
+      if(!oiAvailable||!fundingAvailable)marketDataError="HYPE OI or funding endpoint did not return a valid value";
+    }
+    const allChecks=valid&&fresh&&oiAvailable&&fundingAvailable;
+    return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:allChecks?"PASS":"FAIL",httpStatus:candles.response?.status??null,retryCount:catalog.retryCount+candles.retryCount,catalogCount:Array.isArray(catalog.json.data)?catalog.json.data.length:0,latestCandleAt:stamp?new Date(stamp).toISOString():null,candleAgeMinutes:age===null?null:Math.round(age/60000),fresh,openInterestAvailable:oiAvailable,openInterestValue:oiValue,fundingAvailable,fundingRate,marketDataError,catalogEndpoint:spec.catalog,candleEndpoint:spec.candle,error:!candles.response?.ok?`HTTP ${candles.response.status}`:!valid?"15m candle response invalid":!fresh?"15m candle is stale":marketDataError,latencyMs:Date.now()-started};
   }catch(error){return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:"FAIL",retryCount:0,latencyMs:Date.now()-started,error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
 }
 async function runDeepSweep(){
