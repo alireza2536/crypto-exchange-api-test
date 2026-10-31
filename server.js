@@ -133,10 +133,10 @@ const fundingProbes = [
   {exchange:"XT",kind:"funding_rate",url:"https://fapi.xt.com/future/market/v1/public/q/funding-rate?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&Number.isFinite(Number(j.result.fundingRate??j.result.items?.[0]?.fundingRate))}
 ];
 const synthetic2hProbes = [
-  {exchange:"MEXC",kind:"synthetic_2h",url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
-  {exchange:"WEEX",kind:"synthetic_2h",url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
-  {exchange:"HTX",kind:"synthetic_2h",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=10"},
-  {exchange:"XT",kind:"synthetic_2h",url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1h&limit=10"}
+  {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
+  {exchange:"WEEX",kind:"synthetic_2h",check:j=>true,url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
+  {exchange:"HTX",kind:"synthetic_2h",check:j=>true,url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=10"},
+  {exchange:"XT",kind:"synthetic_2h",check:j=>true,url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1h&limit=10"}
 ];
 const contractListProbes = [
   {exchange:"WEEX",kind:"contract_list",url:"https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",check:j=>Array.isArray(j?.symbols)&&j.symbols.some(x=>x?.symbol==="BTCUSDT"&&x?.contractType==="PERPETUAL"),count:j=>j?.symbols?.length||0},
