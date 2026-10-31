@@ -49,7 +49,7 @@ const probes = [
 
 const dataProbes = [
   { exchange:"MEXC", kind:"candles_15m", url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min15", check:j=>j?.success===true && j?.code===0 && (Array.isArray(j?.data?.time) ? j.data.time.length>0 && Array.isArray(j.data.close) && Number(j.data.close[j.data.close.length-1])>0 : Array.isArray(j?.data) && j.data.length>0) },
-  { exchange:"MEXC", kind:"open_interest", url:"https://api.mexc.com/api/v1/contract/ticker?symbol=BTC_USDT", check:j=>j?.success===true && j?.code===0 && Array.isArray(j?.data) && j.data.some(x=>x?.symbol==="BTC_USDT"&&Number(x?.holdVol)>0) },
+  { exchange:"MEXC", kind:"open_interest", url:"https://api.mexc.com/api/v1/contract/ticker?symbol=BTC_USDT", check:j=>j?.success===true && j?.code===0 && (Array.isArray(j?.data)?j.data.some(x=>x?.symbol==="BTC_USDT"&&Number(x?.holdVol)>0):j?.data?.symbol==="BTC_USDT"&&Number(j.data.holdVol)>0) },
   { exchange:"BingX", kind:"candles_15m", url:"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=15m&limit=3", check:j=>(j?.code===0||j?.code==="0") && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.close)>0 },
   { exchange:"BingX", kind:"open_interest", url:"https://open-api.bingx.com/openApi/swap/v2/quote/openInterest?symbol=BTC-USDT", check:j=>(j?.code===0||j?.code==="0") && j?.data && Number(j.data.openInterest)>0 },
   { exchange:"OKX", kind:"candles_15m", url:"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=15m&limit=3", check:j=>String(j?.code)==="0" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.[4])>0 },
