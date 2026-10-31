@@ -92,7 +92,7 @@ const deepProbes = [];
 const timeframeSpecs = [
   {exchange:"MEXC", values:{"1h":"Min60","4h":"Hour4","1d":"Day1"}, url:v=>`https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=${v}`},
   {exchange:"BingX", values:{"1h":"1h","2h":"2h","4h":"4h","1d":"1d"}, url:v=>`https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=${v}&limit=3`},
-  {exchange:"OKX", values:{"1h":"1H","2h":"2H","4h":"4H","1d":"1D"}, url:v=>`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=${v}&limit=3`},
+  {exchange:"OKX", values:{"1h":"1H","2h":"2H","4h":"4H","1d":"1Dutc"}, url:v=>`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=${v}&limit=3`},
   {exchange:"WEEX", values:{"1h":"1h","4h":"4h","1d":"1d"}, url:v=>`https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=${v}&limit=3`},
   {exchange:"HTX", values:{"1h":"60min","4h":"4hour","1d":"1day"}, url:v=>`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=${v}&size=3`},
   {exchange:"KuCoin", values:{"1h":"1hour","2h":"2hour","4h":"4hour","1d":"1day"}, url:v=>`https://api.kucoin.com/api/ua/v2/market/kline?symbol=XBTUSDTM&tradeType=FUTURES&klineType=TRADE&interval=${v}`},
@@ -151,11 +151,11 @@ function getContractRows(exchange,j) {
 function normalizeContract(exchange,x) {
   if(exchange==="MEXC") return {symbol:x?.symbol,base:x?.baseCoin,quote:x?.quoteCoin,settle:x?.settleCoin,contractType:Number(x?.futureType)===1?"perpetual":Number(x?.futureType)===2?"delivery":"unknown",exchangeState:x?.state,active:Number(x?.state)===0,apiAllowed:typeof x?.apiAllowed==="boolean"?x.apiAllowed:null};
   if(exchange==="BingX") return {symbol:x?.symbol,base:x?.asset,quote:x?.currency||"USDT",settle:x?.currency||"USDT",contractType:"perpetual",exchangeState:x?.status??null,active:typeof x?.status==="number"?x.status===1:null,apiAllowed:x?.apiStateOpen==="true"};
-  if(exchange==="OKX") return {symbol:x?.instId,base:x?.ctValCcy||x?.uly?.split("-")?.[0],quote:x?.settleCcy,settle:x?.settleCcy,contractType:x?.ctType||"swap",exchangeState:x?.state,active:x?.state==="live",apiAllowed:null};
-  if(exchange==="WEEX") return {symbol:x?.symbol,base:x?.baseAsset,quote:x?.quoteAsset,settle:x?.marginAsset,contractType:x?.contractType,exchangeState:x?.status??null,active:typeof x?.status==="number"?x.status===1:typeof x?.status==="string"?(x.status.toUpperCase()==="TRADING"||x.status.toUpperCase()==="OPEN"):null,apiAllowed:null};
+  if(exchange==="OKX"){const parts=String(x?.instId||"").split("-");return {symbol:x?.instId,base:parts[0]||null,quote:parts[1]||null,settle:x?.settleCcy||null,contractType:x?.ctType||"swap",exchangeState:x?.state,active:x?.state==="live",apiAllowed:null};}
+  if(exchange==="WEEX"){const base=x?.baseAsset||String(x?.symbol||"").replace(/USDT$/,"");return {symbol:x?.symbol,base,quote:x?.quoteAsset||"USDT",settle:x?.marginAsset||"USDT",contractType:x?.contractType||"perpetual-market-ticker",exchangeState:x?.status??null,active:typeof x?.status==="number"?x.status===1:typeof x?.status==="string"?(x.status.toUpperCase()==="TRADING"||x.status.toUpperCase()==="OPEN"):null,marketDataAvailable:Number(x?.lastPrice)>0,apiAllowed:null};}
   if(exchange==="HTX") return {symbol:x?.contract_code,base:x?.symbol,quote:x?.quote_asset,settle:x?.settle_asset,contractType:x?.contract_type||"swap",exchangeState:x?.contract_status,active:Number(x?.contract_status)===1,apiAllowed:null};
-  if(exchange==="KuCoin") return {symbol:x?.symbol,base:x?.baseCurrency,quote:x?.quoteCurrency,settle:x?.settleCurrency,contractType:x?.type,exchangeState:x?.status??null,active:x?.status==="Open"||x?.status==="Trading"||x?.status===true,apiAllowed:null};
-  if(exchange==="XT") return {symbol:x?.s,base:x?.s?.split("_")?.[0],quote:x?.s?.split("_")?.[1],settle:x?.s?.split("_")?.[1],contractType:"perpetual-market-ticker",exchangeState:null,active:null,apiAllowed:null};
+  if(exchange==="KuCoin") return {symbol:x?.symbol,base:x?.baseCurrency==="XBT"?"BTC":x?.baseCurrency,quote:x?.quoteCurrency,settle:x?.settleCurrency,contractType:x?.type,exchangeState:x?.status??null,active:x?.status==="Open"||x?.status==="Trading"||x?.status===true,apiAllowed:null};
+  if(exchange==="XT") return {symbol:x?.s,base:x?.s?.split("_")?.[0]?.toUpperCase(),quote:x?.s?.split("_")?.[1]?.toUpperCase(),settle:x?.s?.split("_")?.[1]?.toUpperCase(),contractType:"perpetual-market-ticker",exchangeState:null,active:null,marketDataAvailable:Number(x?.c)>0,apiAllowed:null};
   return null;
 }
 function summarizeContractCatalog(exchange,j) {
@@ -164,21 +164,45 @@ function summarizeContractCatalog(exchange,j) {
   const symbols=normalized.map(x=>String(x.symbol||"").trim().toUpperCase()).filter(Boolean);
   const unique=new Set(symbols);
   const active=normalized.filter(x=>x.active===true).length;
+  const marketDataAvailableCount=normalized.filter(x=>x.marketDataAvailable===true).length;
   const inactive=normalized.filter(x=>x.active===false).length;
   const unknownStatus=normalized.filter(x=>x.active===null).length;
   const btcAliases=exchange==="MEXC"?["BTC_USDT"]:exchange==="BingX"?["BTC-USDT"]:exchange==="OKX"?["BTC-USDT-SWAP"]:exchange==="WEEX"?["BTCUSDT"]:exchange==="HTX"?["BTC-USDT"]:exchange==="KuCoin"?["XBTUSDTM","BTCUSDTM"]:["BTC_USDT"];
-  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,benchmarkFound:btcAliases.some(x=>unique.has(x)),sample:normalized.slice(0,5)};
+  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
   {exchange:"MEXC",kind:"contract_list",url:"https://contract.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
   {exchange:"BingX",kind:"contract_list",url:"https://open-api.bingx.com/openApi/swap/v2/quote/contracts",check:j=>(j?.code===0||j?.code==="0")&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC-USDT"),count:j=>j.data.length},
   {exchange:"OKX",kind:"contract_list",url:"https://www.okx.com/api/v5/public/instruments?instType=SWAP",check:j=>String(j?.code)==="0"&&Array.isArray(j?.data)&&j.data.some(x=>x?.instId==="BTC-USDT-SWAP"),count:j=>j.data.length},
   {exchange:"WEEX",kind:"contract_list",url:"https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",check:j=>Array.isArray(j?.symbols)&&j.symbols.some(x=>x?.symbol==="BTCUSDT"&&x?.contractType==="PERPETUAL"),count:j=>j.symbols.length},
+  {exchange:"WEEX",kind:"market_symbol_list",url:"https://api-contract.weex.com/capi/v3/market/ticker/24hr",check:j=>Array.isArray(j)&&j.some(x=>x?.symbol==="BTCUSDT"&&Number(x?.lastPrice)>0),count:j=>j.length},
   {exchange:"HTX",kind:"contract_list",url:"https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",check:j=>j?.status==="ok"&&Array.isArray(j?.data)&&j.data.some(x=>x?.contract_code==="BTC-USDT"),count:j=>j.data.length},
   {exchange:"KuCoin",kind:"contract_list",url:"https://api-futures.kucoin.com/api/v1/contracts/active",check:j=>String(j?.code)==="200000"&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="XBTUSDTM"),count:j=>j.data.length},
   {exchange:"XT",kind:"market_symbol_list",url:"https://fapi.xt.com/future/market/v1/public/q/tickers",check:j=>j?.returnCode===0&&Array.isArray(j?.result)&&j.result.some(x=>x?.s==="btc_usdt"),count:j=>j.result.length}
 ];
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes];
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...symbolCoverageProbes];
+const symbolCoverageProbes = [];
+const symbolPairs = {
+  MEXC:[["BTC","BTC_USDT"],["ETH","ETH_USDT"],["SOL","SOL_USDT"]],
+  BingX:[["BTC","BTC-USDT"],["ETH","ETH-USDT"],["SOL","SOL-USDT"]],
+  OKX:[["BTC","BTC-USDT-SWAP"],["ETH","ETH-USDT-SWAP"],["SOL","SOL-USDT-SWAP"]],
+  WEEX:[["BTC","BTCUSDT"],["ETH","ETHUSDT"],["SOL","SOLUSDT"]],
+  HTX:[["BTC","BTC-USDT"],["ETH","ETH-USDT"],["SOL","SOL-USDT"]],
+  KuCoin:[["BTC","XBTUSDTM"],["ETH","ETHUSDTM"],["SOL","SOLUSDTM"]],
+  XT:[["BTC","btc_usdt"],["ETH","eth_usdt"],["SOL","sol_usdt"]]
+};
+for(const [exchange,pairs] of Object.entries(symbolPairs)) for(const [base,symbol] of pairs){
+  let url="";
+  if(exchange==="MEXC") url=`https://contract.mexc.com/api/v1/contract/kline/${symbol}?interval=Min15`;
+  if(exchange==="BingX") url=`https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=${symbol}&interval=15m&limit=3`;
+  if(exchange==="OKX") url=`https://www.okx.com/api/v5/market/candles?instId=${symbol}&bar=15m&limit=3`;
+  if(exchange==="WEEX") url=`https://api-contract.weex.com/capi/v3/market/klines?symbol=${symbol}&interval=15m&limit=3`;
+  if(exchange==="HTX") url=`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${symbol}&period=15min&size=3`;
+  if(exchange==="KuCoin") url=`https://api.kucoin.com/api/ua/v2/market/kline?symbol=${symbol}&tradeType=FUTURES&klineType=TRADE&interval=15min`;
+  if(exchange==="XT") url=`https://fapi.xt.com/future/market/v1/public/q/kline?symbol=${symbol}&interval=15m&limit=3`;
+  symbolCoverageProbes.push({exchange,kind:"symbol_coverage_15m",symbol:base,timeframe:"15m",url,check:j=>candleShapeOk(exchange,j)});
+}
+
 async function runDeepProbe(probe) {
   const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try {
