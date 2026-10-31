@@ -142,7 +142,7 @@ function getContractRows(exchange,j) {
   if(exchange==="MEXC") return j?.data;
   if(exchange==="BingX") return j?.data;
   if(exchange==="OKX") return j?.data;
-  if(exchange==="WEEX") return j?.symbols;
+  if(exchange==="WEEX") return Array.isArray(j)?j:j?.symbols;
   if(exchange==="HTX") return j?.data;
   if(exchange==="KuCoin") return j?.data;
   if(exchange==="XT") return j?.result;
