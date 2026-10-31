@@ -7,17 +7,20 @@ const probes = [
   {
     exchange: "MEXC",
     url: "https://contract.mexc.com/api/v1/contract/ticker",
-    check: (j) => j && (j.success === true || j.code === 0) && (Array.isArray(j.data) ? j.data.some((x) => x && typeof x.symbol === "string" && (typeof x.lastPrice === "number" || typeof x.lastPrice === "string")) : (j.data && typeof j.data === "object" && typeof j.data.symbol === "string" && (typeof j.data.lastPrice === "number" || typeof j.data.lastPrice === "string"))),
+    benchmark: "BTC_USDT",
+    check: (j) => j && (j.success === true || j.code === 0) && (Array.isArray(j.data) ? j.data.some((x) => x?.symbol === "BTC_USDT" && Number(x.lastPrice) > 0) : (j.data && j.data.symbol === "BTC_USDT" && Number(j.data.lastPrice) > 0)),
   },
   {
     exchange: "BingX",
     url: "https://open-api.bingx.com/openApi/swap/v2/quote/ticker",
-    check: (j) => j && (j.code === 0 || j.code === "0") && (Array.isArray(j.data) || (j.data && typeof j.data === "object" && (typeof j.data.lastPrice === "string" || typeof j.data.lastPrice === "number" || Array.isArray(j.data)))),
+    benchmark: "BTC-USDT",
+    check: (j) => j && (j.code === 0 || j.code === "0") && Array.isArray(j.data) && j.data.some((x) => x?.symbol === "BTC-USDT" && Number(x.lastPrice) > 0),
   },
   {
     exchange: "OKX",
     url: "https://www.okx.com/api/v5/market/tickers?instType=SWAP",
-    check: (j) => j && String(j.code) === "0" && Array.isArray(j.data) && j.data.length > 0 && typeof j.data[0].instId === "string" && (typeof j.data[0].last === "string" || typeof j.data[0].last === "number"),
+    benchmark: "BTC-USDT-SWAP",
+    check: (j) => j && String(j.code) === "0" && Array.isArray(j.data) && j.data.some((x) => x?.instId === "BTC-USDT-SWAP" && Number(x.last) > 0),
   },
   {
     exchange: "WEEX",
@@ -32,12 +35,14 @@ const probes = [
   {
     exchange: "KuCoin",
     url: "https://api-futures.kucoin.com/api/v1/allTickers",
-    check: (j) => j && String(j.code) === "200000" && Array.isArray(j.data) && j.data.length > 0 && typeof j.data[0].symbol === "string" && (typeof j.data[0].price === "string" || typeof j.data[0].price === "number"),
+    benchmark: "XBTUSDTM/BTCUSDTM",
+    check: (j) => j && String(j.code) === "200000" && Array.isArray(j.data) && j.data.some((x) => ["XBTUSDTM", "BTCUSDTM"].includes(x?.symbol) && Number(x.price) > 0),
   },
   {
     exchange: "XT",
     url: "https://fapi.xt.com/future/market/v1/public/q/tickers",
-    check: (j) => j && j.returnCode === 0 && Array.isArray(j.result) && j.result.length > 0 && typeof j.result[0].s === "string" && (typeof j.result[0].c === "string" || typeof j.result[0].c === "number"),
+    benchmark: "btc_usdt",
+    check: (j) => j && j.returnCode === 0 && Array.isArray(j.result) && j.result.some((x) => x?.s === "btc_usdt" && Number(x.c) > 0),
   },
 ];
 
@@ -63,6 +68,8 @@ async function runProbe(probe) {
       httpStatus: response.status,
       latencyMs: Date.now() - started,
       schemaOk,
+      benchmarkSymbol: probe.benchmark || "BTCUSDT",
+      marketCount: Array.isArray(json?.data) ? json.data.length : (Array.isArray(json?.result) ? json.result.length : (json?.tick ? 1 : 0)),
       apiCode,
       contentType,
       responseBytes: Buffer.byteLength(raw),
@@ -77,6 +84,8 @@ async function runProbe(probe) {
       httpStatus: null,
       latencyMs: Date.now() - started,
       schemaOk: false,
+      benchmarkSymbol: probe.benchmark || "BTCUSDT",
+      marketCount: 0,
       apiCode: null,
       contentType: null,
       responseBytes: 0,
