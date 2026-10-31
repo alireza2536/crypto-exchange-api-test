@@ -114,9 +114,9 @@ function buildSynthetic2h(exchange,j) {
   rows=rows.filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c].every(Number.isFinite)&&x.c>0);
   rows.sort((a,b)=>a.t-b.t);
   const now=Date.now();
-  for(let i=0;i<rows.length-1;i++){
+  for(let i=rows.length-2;i>=0;i--){
     const a=rows[i],b=rows[i+1];
-    if(a.t%7200000===0&&b.t-a.t===3600000&&a.t+7200000<=now-120000){
+    if(a.t%7200000===0&&b.t-a.t===3600000&&a.t+7200000<=now-120000&&now-(a.t+7200000)<=4*60*60*1000+300000){
       const aggregate={startAt:new Date(a.t).toISOString(),endAt:new Date(a.t+7200000).toISOString(),open:a.o,high:Math.max(a.h,b.h),low:Math.min(a.l,b.l),close:b.c,volume:a.v+b.v,sourceBars:2};
       if(aggregate.high>=aggregate.low&&aggregate.open>0&&aggregate.close>0&&aggregate.volume>=0)return aggregate;
     }
