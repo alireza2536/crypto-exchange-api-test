@@ -132,6 +132,26 @@ const fundingProbes = [
   {exchange:"KuCoin",kind:"funding_rate",url:"https://api-futures.kucoin.com/api/v1/funding-rate/XBTUSDTM/current",check:j=>String(j?.code)==="200000"&&j?.data&&Number.isFinite(Number(j.data.value))},
   {exchange:"XT",kind:"funding_rate",url:"https://fapi.xt.com/future/market/v1/public/q/funding-rate?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&Number.isFinite(Number(j.result.fundingRate??j.result.items?.[0]?.fundingRate))}
 ];
+function buildSynthetic1dUtc(exchange,j) {
+  if(exchange!=="HTX") return null;
+  const rows=(j?.data||[]).map(x=>({t:Number(x?.id)*1000,o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close),v:Number(x?.vol??x?.amount??0)}))
+    .filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c].every(Number.isFinite)&&x.c>0)
+    .sort((a,b)=>a.t-b.t);
+  const dayMs=86400000,now=Date.now(),days=new Map();
+  for(const row of rows){const start=Math.floor(row.t/dayMs)*dayMs;if(!days.has(start))days.set(start,[]);days.get(start).push(row);}
+  const starts=[...days.keys()].sort((a,b)=>b-a);
+  for(const start of starts){
+    const bars=days.get(start).sort((a,b)=>a.t-b.t);
+    if(start+dayMs>now-120000||now-(start+dayMs)>2*dayMs||bars.length!==24)continue;
+    let contiguous=true;for(let i=1;i<bars.length;i++)if(bars[i].t-bars[i-1].t!==3600000){contiguous=false;break;}
+    if(!contiguous||bars[0].t!==start||bars[23].t!==start+23*3600000)continue;
+    return {startAt:new Date(start).toISOString(),endAt:new Date(start+dayMs).toISOString(),open:bars[0].o,high:Math.max(...bars.map(x=>x.h)),low:Math.min(...bars.map(x=>x.l)),close:bars[23].c,volume:bars.reduce((n,x)=>n+x.v,0),sourceBars:24,timezone:"UTC"};
+  }
+  return null;
+}
+const utcDailyProbes=[
+  {exchange:"HTX",kind:"synthetic_1d_utc",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=30",check:j=>Boolean(buildSynthetic1dUtc("HTX",j))}
+];
 const synthetic2hProbes = [
   {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
   {exchange:"WEEX",kind:"synthetic_2h",check:j=>true,url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
@@ -165,10 +185,12 @@ function summarizeContractCatalog(exchange,j) {
   const unique=new Set(symbols);
   const active=normalized.filter(x=>x.active===true).length;
   const marketDataAvailableCount=normalized.filter(x=>x.marketDataAvailable===true).length;
+  const usdtSettledCount=normalized.filter(x=>String(x.settle||x.quote||"").toUpperCase()==="USDT").length;
+  const inverseCount=normalized.filter(x=>x.contractType==="inverse"||(x.base&&x.settle&&String(x.base).toUpperCase()===String(x.settle).toUpperCase())).length;
   const inactive=normalized.filter(x=>x.active===false).length;
   const unknownStatus=normalized.filter(x=>x.active===null).length;
   const btcAliases=exchange==="MEXC"?["BTC_USDT"]:exchange==="BingX"?["BTC-USDT"]:exchange==="OKX"?["BTC-USDT-SWAP"]:exchange==="WEEX"?["BTCUSDT"]:exchange==="HTX"?["BTC-USDT"]:exchange==="KuCoin"?["XBTUSDTM","BTCUSDTM"]:["BTC_USDT"];
-  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),sample:normalized.slice(0,5)};
+  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
   {exchange:"MEXC",kind:"contract_list",url:"https://contract.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
@@ -202,13 +224,14 @@ for(const [exchange,pairs] of Object.entries(symbolPairs)) for(const [base,symbo
   symbolCoverageProbes.push({exchange,kind:"candles_15m_symbol_coverage",symbol:base,timeframe:"15m",url,check:j=>candleShapeOk(exchange,j)});
 }
 
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...symbolCoverageProbes];
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...utcDailyProbes,...symbolCoverageProbes];
 async function runDeepProbe(probe) {
   const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try {
     const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
     const raw=await response.text();let json;try{json=JSON.parse(raw)}catch{json=null}
-    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null;
+    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null,synthetic1dUtc=null;
+    if(probe.kind==="synthetic_1d_utc"&&json){synthetic1dUtc=buildSynthetic1dUtc(probe.exchange,json);schemaOk=Boolean(synthetic1dUtc);}
     if(probe.kind==="synthetic_2h"&&json){synthetic2h=buildSynthetic2h(probe.exchange,json);schemaOk=Boolean(synthetic2h);}
     if(probe.kind.startsWith("candles_")&&schemaOk){
       latestCandleAt=candleTimestamp(probe.exchange,json);
@@ -217,9 +240,29 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   finally{clearTimeout(timer)}
+}
+async function runWeexCatalogAudit(){
+  const urls=[
+    "https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",
+    "https://api-contract.weex.com/capi/v3/market/ticker/24hr"
+  ];
+  const responses=[];
+  for(const url of urls){
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+    try{const r=await fetch(url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});const raw=await r.text();let json;try{json=JSON.parse(raw)}catch{json=null}responses.push({ok:r.ok,json,httpStatus:r.status,error:null});}
+    catch(e){responses.push({ok:false,json:null,httpStatus:null,error:e.name==="AbortError"?"timeout":String(e.message||e)});}
+    finally{clearTimeout(timer);}
+  }
+  const contracts=responses[0]?.json?.symbols||[];
+  const tickers=Array.isArray(responses[1]?.json)?responses[1].json:[];
+  const contractSet=new Set(contracts.map(x=>String(x?.symbol||"").toUpperCase()).filter(Boolean));
+  const tickerSet=new Set(tickers.map(x=>String(x?.symbol||"").toUpperCase()).filter(Boolean));
+  const matched=[...tickerSet].filter(x=>contractSet.has(x));
+  const tickerWithPrice=tickers.filter(x=>Number(x?.lastPrice)>0).length;
+  return {exchange:"WEEX",contractListHttp:responses[0]?.httpStatus,tickerListHttp:responses[1]?.httpStatus,contractListCount:contracts.length,tickerListCount:tickers.length,tickerWithPrice,matchedSymbolCount:matched.length,tickerOnlyCount:[...tickerSet].filter(x=>!contractSet.has(x)).length,contractWithoutTickerCount:[...contractSet].filter(x=>!tickerSet.has(x)).length,tickerOnlySample:[...tickerSet].filter(x=>!contractSet.has(x)).slice(0,10),contractWithoutTickerSample:[...contractSet].filter(x=>!tickerSet.has(x)).slice(0,10),errors:responses.filter(x=>!x.ok).map(x=>x.error||`HTTP ${x.httpStatus}`)};
 }
 async function runDeepSweep(){
   const groups=new Map();
@@ -233,7 +276,8 @@ async function runDeepSweep(){
     return results;
   }));
   const results=batches.flat();
-  return {finishedAt:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results};
+  const catalogAudits=[await runWeexCatalogAudit()];
+  return {finishedAt:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results,catalogAudits};
 }
 
 async function runDataProbe(probe) {
