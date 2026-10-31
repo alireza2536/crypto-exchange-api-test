@@ -46,6 +46,35 @@ const probes = [
   },
 ];
 
+
+const dataProbes = [
+  { exchange:"MEXC", kind:"candles_15m", url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min15", check:j=>j?.success===true && j?.code===0 && (Array.isArray(j?.data?.time) ? j.data.time.length>0 && Array.isArray(j.data.close) && Number(j.data.close[0])>0 : Array.isArray(j?.data) && j.data.length>0) },
+  { exchange:"BingX", kind:"candles_15m", url:"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=15m&limit=3", check:j=>(j?.code===0||j?.code==="0") && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.close)>0 },
+  { exchange:"BingX", kind:"open_interest", url:"https://open-api.bingx.com/openApi/swap/v2/quote/openInterest?symbol=BTC-USDT", check:j=>(j?.code===0||j?.code==="0") && j?.data && Number(j.data.openInterest)>0 },
+  { exchange:"OKX", kind:"candles_15m", url:"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=15m&limit=3", check:j=>String(j?.code)==="0" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.[4])>0 },
+  { exchange:"OKX", kind:"open_interest", url:"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId=BTC-USDT-SWAP", check:j=>String(j?.code)==="0" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.oi)>0 },
+  { exchange:"WEEX", kind:"candles_15m", url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=15m&limit=3", check:j=>Array.isArray(j) && j.length>0 && Number(j[0]?.[4])>0 },
+  { exchange:"WEEX", kind:"open_interest", url:"https://api-contract.weex.com/capi/v3/market/openInterest?symbol=BTCUSDT", check:j=>j?.symbol==="BTCUSDT" && Number(j.openInterest)>0 },
+  { exchange:"HTX", kind:"candles_15m", url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=15min&size=3", check:j=>j?.status==="ok" && Array.isArray(j.data) && j.data.length>0 && Number(j.data[0]?.close)>0 },
+  { exchange:"HTX", kind:"open_interest", url:"https://api.hbdm.com/linear-swap-api/v1/swap_open_interest?contract_code=BTC-USDT", check:j=>j?.status==="ok" && j?.data && (Array.isArray(j.data) ? j.data.some(x=>Number(x?.volume??x?.amount??x?.open_interest)>0) : Number(j.data.volume??j.data.amount??j.data.open_interest)>0) },
+  { exchange:"KuCoin", kind:"candles_15m", url:"https://api.kucoin.com/api/ua/v2/market/kline?symbol=XBTUSDTM&tradeType=FUTURES&klineType=TRADE&interval=15min", check:j=>String(j?.code)==="200000" && Array.isArray(j?.data?.list) && j.data.list.length>0 && Number(j.data.list[0]?.[4])>0 },
+  { exchange:"KuCoin", kind:"open_interest_15m", url:"https://api.kucoin.com/api/ua/v2/market/open-interest?symbol=XBTUSDTM&interval=15min&pageSize=3", check:j=>String(j?.code)==="200000" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.openInterest)>0 },
+  { exchange:"XT", kind:"candles_15m", url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=15m&limit=3", check:j=>j?.returnCode===0 && (Array.isArray(j?.result) ? j.result.length>0 : Array.isArray(j?.result?.items) && j.result.items.length>0) },
+  { exchange:"XT", kind:"open_interest", url:"https://fapi.xt.com/future/market/v1/public/contract/open-interest?symbol=btc_usdt", check:j=>j?.returnCode===0 && j?.result && Number(j.result.openInterest??j.result.openInterestUsd)>0 },
+];
+
+async function runDataProbe(probe) {
+  const started=Date.now(), controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+  try {
+    const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
+    const raw=await response.text(); let json; try{json=JSON.parse(raw)}catch{json=null}
+    const schemaOk=Boolean(json&&probe.check(json));
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?"Response schema/value check failed":null};
+  } catch(error) {
+    return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)};
+  } finally {clearTimeout(timer)}
+}
+
 async function runProbe(probe) {
   const started = Date.now();
   const controller = new AbortController();
@@ -115,13 +144,13 @@ small{color:#94a3b8;word-break:break-all}.summary{margin-top:16px}
 <body><main>
 <h1>تست اتصال API هفت صرافی فیوچرز</h1>
 <p>این ابزار فقط درخواست‌های عمومی GET می‌فرستد؛ کلید API یا اطلاعات حساب لازم نیست. هر هفت تست هم‌زمان اجرا می‌شوند.</p>
-<button id="run">اجرای تست هر ۷ صرافی</button>
+<button id="run">اجرای تست تیکر هر ۷ صرافی</button>\n<button id="dataRun" style="margin-right:8px;background:#0f766e">تست کندل و Open Interest</button>\n<pre id="dataSummary" style="white-space:pre-wrap;overflow-wrap:anywhere;color:#cbd5e1;background:#111c2e;padding:12px;border-radius:10px;margin-top:14px">تست تکمیلی داده‌ها هنوز اجرا نشده است.</pre>
 <div class="summary" id="summary">هنوز تستی اجرا نشده است.</div>
 <table><thead><tr><th>صرافی</th><th>نتیجه</th><th>HTTP</th><th>زمان (ms)</th><th>جزئیات</th></tr></thead><tbody id="rows"></tbody></table>
 <p><small>PASS یعنی پاسخ HTTP موفق و ساختار پایه پاسخ قابل تشخیص بوده است؛ این تست به‌تنهایی تضمین‌کننده پایداری یا پوشش کامل بازار نیست.</small></p>
 </main>
 <script>
-const btn=document.getElementById('run'), rows=document.getElementById('rows'), summary=document.getElementById('summary');
+const btn=document.getElementById('run'), rows=document.getElementById('rows'), summary=document.getElementById('summary');\nconst dataBtn=document.getElementById('dataRun'), dataSummary=document.getElementById('dataSummary');\ndataBtn.addEventListener('click',async()=>{dataBtn.disabled=true;dataBtn.textContent='در حال تست داده‌ها...';dataSummary.textContent='در حال بررسی کندل ۱۵ دقیقه و Open Interest در صرافی‌ها...';try{const r=await fetch('/api/data-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();dataSummary.textContent='موفق: '+b.passed+' از '+b.total+'\\n'+b.results.map(x=>x.exchange+' | '+x.kind+' | '+x.status+' | '+x.latencyMs+'ms'+(x.error?' | '+x.error:'')).join('\\n')+'\\n\\nجزئیات JSON در /api/data-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{dataBtn.disabled=false;dataBtn.textContent='اجرای دوباره تست داده‌ها'}});
 btn.addEventListener('click',async()=>{
  btn.disabled=true;btn.textContent='در حال آزمایش...';summary.textContent='درخواست‌ها به‌صورت هم‌زمان ارسال شدند.';
  try{
@@ -133,12 +162,23 @@ btn.addEventListener('click',async()=>{
 });
 </script></body></html>`;
 
-const server = http.createServer(async (req, res) => {
+async function runDataSweep() {
+  const results=await Promise.all(dataProbes.map(runDataProbe));
+  const passed=results.filter(x=>x.status==="PASS").length;
+  console.log(JSON.stringify({event:"startup_market_data_probe",finishedAt:new Date().toISOString(),passed,total:results.length,results}));
+}
+\nconst server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   res.setHeader("access-control-allow-origin", "*");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     return res.end(JSON.stringify({ ok: true, service: "exchange-api-connectivity-test" }));
+  }
+  if (url.pathname === "/api/data-test") {
+    const results = await Promise.all(dataProbes.map(runDataProbe));
+    const passed = results.filter((x) => x.status === "PASS").length;
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    return res.end(JSON.stringify({ finishedAt: new Date().toISOString(), passed, total: results.length, results }));
   }
   if (url.pathname === "/api/test") {
     const results = await Promise.all(probes.map(runProbe));
