@@ -127,7 +127,17 @@ async function runDeepProbe(probe) {
   finally{clearTimeout(timer)}
 }
 async function runDeepSweep(){
-  const results=await Promise.all(allDeepProbes.map(runDeepProbe));
+  const groups=new Map();
+  for(const probe of allDeepProbes){if(!groups.has(probe.exchange))groups.set(probe.exchange,[]);groups.get(probe.exchange).push(probe)}
+  const batches=await Promise.all([...groups.entries()].map(async([exchange,items])=>{
+    const results=[];
+    for(let i=0;i<items.length;i++){
+      if(i>0) await new Promise(resolve=>setTimeout(resolve,1100));
+      results.push(await runDeepProbe(items[i]));
+    }
+    return results;
+  }));
+  const results=batches.flat();
   return {finishedAt:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results};
 }
 
@@ -277,6 +287,8 @@ server.listen(PORT, "0.0.0.0", () => {
     const passed = results.filter((item) => item.status === "PASS").length;
     console.log(JSON.stringify({ event: "startup_exchange_probe", finishedAt: new Date().toISOString(), passed, total: results.length, results }));
     await runDataSweep();
+    const deep = await runDeepSweep();
+    console.log(JSON.stringify({ event: "startup_deep_market_probe", ...deep }));
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
   });
