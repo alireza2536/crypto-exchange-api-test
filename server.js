@@ -1,7 +1,126 @@
 import http from "node:http";
+import pg from "pg";
+const { Pool } = pg;
 
 const PORT = Number(process.env.PORT || 3000);
 const TIMEOUT_MS = 15000;
+
+const OI_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+const oiSnapshotPool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : undefined,
+      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000,
+      max: 3,
+    })
+  : null;
+let oiSnapshotDbReady = false;
+let oiSnapshotDbError = null;
+let oiSnapshotCollectorRunning = false;
+let oiSnapshotLastRunAt = null;
+let oiSnapshotLastSaved = 0;
+let oiSnapshotLastFailures = [];
+
+async function initOiSnapshotDb() {
+  if (!oiSnapshotPool) return false;
+  try {
+    await oiSnapshotPool.query(`
+      CREATE TABLE IF NOT EXISTS oi_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        metric TEXT NOT NULL DEFAULT 'open_interest',
+        value NUMERIC NOT NULL CHECK (value > 0),
+        collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        source_endpoint TEXT,
+        UNIQUE (exchange, symbol, metric, collected_at)
+      )
+    `);
+    await oiSnapshotPool.query("CREATE INDEX IF NOT EXISTS oi_snapshots_exchange_time_idx ON oi_snapshots (exchange, collected_at DESC)");
+    oiSnapshotDbReady = true;
+    oiSnapshotDbError = null;
+    return true;
+  } catch (error) {
+    oiSnapshotDbReady = false;
+    oiSnapshotDbError = String(error.message || error);
+    return false;
+  }
+}
+
+function extractOpenInterestValue(exchange, json) {
+  let value = null;
+  if (exchange === "MEXC") {
+    const row = Array.isArray(json?.data) ? json.data.find(x => x?.symbol === "BTC_USDT") : json?.data;
+    value = row?.holdVol;
+  } else if (exchange === "BingX") value = json?.data?.openInterest;
+  else if (exchange === "OKX") value = json?.data?.find(x => x?.instId === "BTC-USDT-SWAP")?.oi ?? json?.data?.[0]?.oi;
+  else if (exchange === "WEEX") value = json?.openInterest;
+  else if (exchange === "HTX") {
+    const rows = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : [];
+    const row = rows.find(x => Number(x?.volume ?? x?.amount ?? x?.open_interest) > 0);
+    value = row?.volume ?? row?.amount ?? row?.open_interest;
+  } else if (exchange === "KuCoin") value = json?.data?.[0]?.openInterest;
+  else if (exchange === "XT") value = json?.result?.openInterest ?? json?.result?.openInterestUsd;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+async function collectOpenInterestSnapshots() {
+  if (!oiSnapshotPool || !oiSnapshotDbReady || oiSnapshotCollectorRunning) return;
+  oiSnapshotCollectorRunning = true;
+  oiSnapshotLastRunAt = new Date().toISOString();
+  oiSnapshotLastSaved = 0;
+  oiSnapshotLastFailures = [];
+  try {
+    const probes = dataProbes.filter(p => p.kind === "open_interest" || p.kind === "open_interest_15m");
+    const outcomes = await Promise.all(probes.map(async probe => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      try {
+        const response = await fetch(probe.url, { headers: { accept: "application/json", "user-agent": "exchange-api-connectivity-test/1.0" }, signal: controller.signal });
+        const raw = await response.text();
+        let json;
+        try { json = JSON.parse(raw); } catch { json = null; }
+        if (!response.ok || !json || !probe.check(json)) throw new Error(!response.ok ? `HTTP ${response.status}` : "API schema/value check failed");
+        const value = extractOpenInterestValue(probe.exchange, json);
+        if (value === null) throw new Error("Open Interest value could not be extracted");
+        const symbol = probe.exchange === "MEXC" ? "BTC_USDT" : probe.exchange === "OKX" ? "BTC-USDT-SWAP" : probe.exchange === "HTX" ? "BTC-USDT" : probe.exchange === "KuCoin" ? "XBTUSDTM" : probe.exchange === "XT" ? "btc_usdt" : "BTCUSDT";
+        await oiSnapshotPool.query(
+          "INSERT INTO oi_snapshots (exchange, symbol, metric, value, source_endpoint) VALUES ($1,$2,$3,$4,$5)",
+          [probe.exchange, symbol, "open_interest_native", value, probe.url]
+        );
+        return { exchange: probe.exchange, status: "SAVED" };
+      } catch (error) {
+        return { exchange: probe.exchange, status: "FAIL", error: String(error.message || error) };
+      } finally { clearTimeout(timer); }
+    }));
+    oiSnapshotLastSaved = outcomes.filter(x => x.status === "SAVED").length;
+    oiSnapshotLastFailures = outcomes.filter(x => x.status === "FAIL");
+    console.log(JSON.stringify({ event: "open_interest_snapshot_collection", finishedAt: new Date().toISOString(), saved: oiSnapshotLastSaved, total: outcomes.length, failures: oiSnapshotLastFailures }));
+  } finally {
+    oiSnapshotCollectorRunning = false;
+  }
+}
+
+async function getOiSnapshotStatus() {
+  const status = {
+    configured: Boolean(oiSnapshotPool),
+    databaseReady: oiSnapshotDbReady,
+    collectorIntervalMinutes: OI_SNAPSHOT_INTERVAL_MS / 60000,
+    lastRunAt: oiSnapshotLastRunAt,
+    lastSaved: oiSnapshotLastSaved,
+    lastFailures: oiSnapshotLastFailures,
+    note: oiSnapshotPool ? (oiSnapshotDbReady ? "Open Interest snapshots are being stored; values use each exchange's native units and should not be compared directly across exchanges." : "DATABASE_URL is set but database initialization has not succeeded.") : "Persistent history is not enabled. Configure DATABASE_URL with a PostgreSQL database to enable periodic snapshots.",
+  };
+  if (oiSnapshotPool && oiSnapshotDbReady) {
+    try {
+      const result = await oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, MAX(collected_at) AS last_collected_at FROM oi_snapshots GROUP BY exchange ORDER BY exchange");
+      status.coverage = result.rows;
+    } catch (error) { status.queryError = String(error.message || error); }
+  }
+  return status;
+}
 
 const probes = [
   {
@@ -482,6 +601,32 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     return res.end(JSON.stringify({ ok: true, service: "exchange-api-connectivity-test" }));
   }
+
+  if (url.pathname === "/api/open-interest-status") {
+    const status = await getOiSnapshotStatus();
+    res.writeHead(status.databaseReady ? 200 : 503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    return res.end(JSON.stringify(status));
+  }
+  if (url.pathname === "/api/open-interest-history") {
+    if (!oiSnapshotPool || !oiSnapshotDbReady) {
+      res.writeHead(503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ error: "Persistent Open Interest history is not configured", status: await getOiSnapshotStatus() }));
+    }
+    const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours") || 24)));
+    const exchange = url.searchParams.get("exchange");
+    const params = [new Date(Date.now() - hours * 3600000)];
+    let sql = "SELECT exchange, symbol, metric, value::text AS value, collected_at, source_endpoint FROM oi_snapshots WHERE collected_at >= $1";
+    if (exchange) { params.push(exchange); sql += " AND exchange = $2"; }
+    sql += " ORDER BY collected_at DESC LIMIT 5000";
+    try {
+      const result = await oiSnapshotPool.query(sql, params);
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ hours, count: result.rowCount, results: result.rows, unitsNote: "Open Interest values are in exchange-native units; do not compare raw values across exchanges." }));
+    } catch (error) {
+      res.writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ error: String(error.message || error) }));
+    }
+  }
   if (url.pathname === "/api/data-test") {
     const results = await Promise.all(dataProbes.map(runDataProbe));
     const passed = results.filter((x) => x.status === "PASS").length;
@@ -509,6 +654,17 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Exchange API test service listening on ${PORT}`);
+  if (oiSnapshotPool) {
+    initOiSnapshotDb().then(async ready => {
+      console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready, error: oiSnapshotDbError }));
+      if (ready) {
+        await collectOpenInterestSnapshots();
+        setInterval(collectOpenInterestSnapshots, OI_SNAPSHOT_INTERVAL_MS).unref();
+      }
+    });
+  } else {
+    console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready: false, reason: "DATABASE_URL not configured" }));
+  }
   // Run one diagnostic sweep after each deploy/restart so results are available in Render logs.
   Promise.all(probes.map(runProbe)).then(async (results) => {
     const passed = results.filter((item) => item.status === "PASS").length;
