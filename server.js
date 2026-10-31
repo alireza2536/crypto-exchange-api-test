@@ -205,13 +205,13 @@ const contractListProbes = [
 ];
 const symbolCoverageProbes = [];
 const symbolPairs = {
-  MEXC:[["BTC","BTC_USDT"],["ETH","ETH_USDT"],["SOL","SOL_USDT"]],
-  BingX:[["BTC","BTC-USDT"],["ETH","ETH-USDT"],["SOL","SOL-USDT"]],
-  OKX:[["BTC","BTC-USDT-SWAP"],["ETH","ETH-USDT-SWAP"],["SOL","SOL-USDT-SWAP"]],
-  WEEX:[["BTC","BTCUSDT"],["ETH","ETHUSDT"],["SOL","SOLUSDT"]],
-  HTX:[["BTC","BTC-USDT"],["ETH","ETH-USDT"],["SOL","SOL-USDT"]],
-  KuCoin:[["BTC","XBTUSDTM"],["ETH","ETHUSDTM"],["SOL","SOLUSDTM"]],
-  XT:[["BTC","btc_usdt"],["ETH","eth_usdt"],["SOL","sol_usdt"]]
+  MEXC:[["BTC","BTC_USDT"],["ETH","ETH_USDT"],["SOL","SOL_USDT"],["XRP","XRP_USDT"],["DOGE","DOGE_USDT"]],
+  BingX:[["BTC","BTC-USDT"],["ETH","ETH-USDT"],["SOL","SOL-USDT"],["XRP","XRP-USDT"],["DOGE","DOGE-USDT"]],
+  OKX:[["BTC","BTC-USDT-SWAP"],["ETH","ETH-USDT-SWAP"],["SOL","SOL-USDT-SWAP"],["XRP","XRP-USDT-SWAP"],["DOGE","DOGE-USDT-SWAP"]],
+  WEEX:[["BTC","BTCUSDT"],["ETH","ETHUSDT"],["SOL","SOLUSDT"],["XRP","XRPUSDT"],["DOGE","DOGEUSDT"]],
+  HTX:[["BTC","BTC-USDT"],["ETH","ETH-USDT"],["SOL","SOL-USDT"],["XRP","XRP-USDT"],["DOGE","DOGE-USDT"]],
+  KuCoin:[["BTC","XBTUSDTM"],["ETH","ETHUSDTM"],["SOL","SOLUSDTM"],["XRP","XRPUSDTM"],["DOGE","DOGEUSDTM"]],
+  XT:[["BTC","btc_usdt"],["ETH","eth_usdt"],["SOL","sol_usdt"],["XRP","xrp_usdt"],["DOGE","doge_usdt"]]
 };
 for(const [exchange,pairs] of Object.entries(symbolPairs)) for(const [base,symbol] of pairs){
   let url="";
