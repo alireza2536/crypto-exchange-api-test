@@ -1,0 +1,15 @@
+name: One-time exchange API probe
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-api-probe.yml
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call live Render probe endpoint
+        run: |
+          curl --fail --silent --show-error --max-time 90 "https://exchange-api-connectivity-test.onrender.com/api/test" -o result.json
+          python -m json.tool result.json
