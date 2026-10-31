@@ -150,13 +150,24 @@ function getContractRows(exchange,j) {
 }
 function normalizeContract(exchange,x) {
   if(exchange==="MEXC") return {symbol:x?.symbol,base:x?.baseCoin,quote:x?.quoteCoin,settle:x?.settleCoin,contractType:Number(x?.futureType)===1?"perpetual":Number(x?.futureType)===2?"delivery":"unknown",exchangeState:x?.state,active:Number(x?.state)===0,apiAllowed:typeof x?.apiAllowed==="boolean"?x.apiAllowed:null};
-  if(exchange==="BingX") return {symbol:x?.symbol,base:x?.currency,quote:x?.currency||"USDT",settle:x?.currency||"USDT",contractType:"perpetual",exchangeState:x?.status??x?.apiStateClose,active:x?.status===1||x?.status==="1"||x?.apiStateClose==="false",apiAllowed:null};
+  if(exchange==="BingX") return {symbol:x?.symbol,base:x?.asset,quote:x?.currency||"USDT",settle:x?.currency||"USDT",contractType:"perpetual",exchangeState:x?.status??null,active:typeof x?.status==="number"?x.status===1:null,apiAllowed:x?.apiStateOpen==="true"};
   if(exchange==="OKX") return {symbol:x?.instId,base:x?.ctValCcy||x?.uly?.split("-")?.[0],quote:x?.settleCcy,settle:x?.settleCcy,contractType:x?.ctType||"swap",exchangeState:x?.state,active:x?.state==="live",apiAllowed:null};
-  if(exchange==="WEEX") return {symbol:x?.symbol,base:x?.baseAsset,quote:x?.quoteAsset,settle:x?.marginAsset,contractType:x?.contractType,exchangeState:x?.status??null,active:x?.contractType==="PERPETUAL",apiAllowed:null};
+  if(exchange==="WEEX") return {symbol:x?.symbol,base:x?.baseAsset,quote:x?.quoteAsset,settle:x?.marginAsset,contractType:x?.contractType,exchangeState:x?.status??null,active:typeof x?.status==="number"?x.status===1:typeof x?.status==="string"?(x.status.toUpperCase()==="TRADING"||x.status.toUpperCase()==="OPEN"):null,apiAllowed:null};
   if(exchange==="HTX") return {symbol:x?.contract_code,base:x?.symbol,quote:x?.quote_asset,settle:x?.settle_asset,contractType:x?.contract_type||"swap",exchangeState:x?.contract_status,active:Number(x?.contract_status)===1,apiAllowed:null};
   if(exchange==="KuCoin") return {symbol:x?.symbol,base:x?.baseCurrency,quote:x?.quoteCurrency,settle:x?.settleCurrency,contractType:x?.type,exchangeState:x?.status??null,active:x?.status==="Open"||x?.status==="Trading"||x?.status===true,apiAllowed:null};
-  if(exchange==="XT") return {symbol:x?.s,base:x?.s?.split("_")?.[0],quote:x?.s?.split("_")?.[1],settle:x?.s?.split("_")?.[1],contractType:"perpetual-market-ticker",exchangeState:null,active:Number(x?.c)>0,apiAllowed:null};
+  if(exchange==="XT") return {symbol:x?.s,base:x?.s?.split("_")?.[0],quote:x?.s?.split("_")?.[1],settle:x?.s?.split("_")?.[1],contractType:"perpetual-market-ticker",exchangeState:null,active:null,apiAllowed:null};
   return null;
+}
+function summarizeContractCatalog(exchange,j) {
+  const raw=getContractRows(exchange,j);
+  const normalized=(Array.isArray(raw)?raw:[]).map(x=>normalizeContract(exchange,x)).filter(Boolean);
+  const symbols=normalized.map(x=>String(x.symbol||"").trim().toUpperCase()).filter(Boolean);
+  const unique=new Set(symbols);
+  const active=normalized.filter(x=>x.active===true).length;
+  const inactive=normalized.filter(x=>x.active===false).length;
+  const unknownStatus=normalized.filter(x=>x.active===null).length;
+  const btcAliases=exchange==="MEXC"?["BTC_USDT"]:exchange==="BingX"?["BTC-USDT"]:exchange==="OKX"?["BTC-USDT-SWAP"]:exchange==="WEEX"?["BTCUSDT"]:exchange==="HTX"?["BTC-USDT"]:exchange==="KuCoin"?["XBTUSDTM","BTCUSDTM"]:["BTC_USDT"];
+  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,benchmarkFound:btcAliases.some(x=>unique.has(x)),sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
   {exchange:"MEXC",kind:"contract_list",url:"https://contract.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
@@ -182,7 +193,7 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,normalizedContracts:["contract_list","market_symbol_list"].includes(probe.kind)?getContractRows(probe.exchange,json).map(x=>normalizeContract(probe.exchange,x)).filter(x=>x?.symbol):null,synthetic2h,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   finally{clearTimeout(timer)}
 }
