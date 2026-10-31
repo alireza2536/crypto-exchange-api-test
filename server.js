@@ -289,6 +289,39 @@ async function runWeexCatalogAudit(){
   const tickerWithPrice=tickers.filter(x=>Number(x?.lastPrice)>0).length;
   return {exchange:"WEEX",contractListHttp:responses[0]?.httpStatus,tickerListHttp:responses[1]?.httpStatus,contractListCount:contracts.length,tickerListCount:tickers.length,tickerWithPrice,matchedSymbolCount:matched.length,matchedWithPriceCount:matchedWithPrice,tickerOnlyCount:[...tickerSet].filter(x=>!contractSet.has(x)).length,contractWithoutTickerCount:[...contractSet].filter(x=>!tickerSet.has(x)).length,tickerOnlySample:[...tickerSet].filter(x=>!contractSet.has(x)).slice(0,10),contractWithoutTickerSample:[...contractSet].filter(x=>!tickerSet.has(x)).slice(0,10),errors:responses.filter(x=>!x.ok).map(x=>x.error||`HTTP ${x.httpStatus}`)};
 }
+async function fetchJsonWithRetry(url){
+  let response=null,raw="",json=null,retryCount=0;
+  for(let attempt=0;attempt<2;attempt++){
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+    try{response=await fetch(url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});raw=await response.text();try{json=JSON.parse(raw)}catch{json=null}}
+    finally{clearTimeout(timer)}
+    const apiCode=Number(json?.code??json?.returnCode);
+    const transient=(!response.ok&&[429,500,502,503,504].includes(response.status))||[100410,100429].includes(apiCode);
+    if(attempt===0&&transient){retryCount=1;await new Promise(resolve=>setTimeout(resolve,1800));continue;}
+    break;
+  }
+  return {response,raw,json,retryCount};
+}
+async function runHypeSymbolProbe(exchange){
+  const specs={
+    MEXC:{catalog:"https://contract.mexc.com/api/v1/contract/detail",symbol:"HYPE_USDT",find:j=>(j?.data||[]).find(x=>x?.symbol==="HYPE_USDT"),active:x=>Number(x?.state)===0,candle:"https://contract.mexc.com/api/v1/contract/kline/HYPE_USDT?interval=Min15"},
+    OKX:{catalog:"https://www.okx.com/api/v5/public/instruments?instType=SWAP",symbol:"HYPE-USDT-SWAP",find:j=>(j?.data||[]).find(x=>x?.instId==="HYPE-USDT-SWAP"),active:x=>x?.state==="live",candle:"https://www.okx.com/api/v5/market/candles?instId=HYPE-USDT-SWAP&bar=15m&limit=3"}
+  };
+  const spec=specs[exchange],started=Date.now();
+  try{
+    const catalog=await fetchJsonWithRetry(spec.catalog);
+    if(!catalog.response?.ok||!catalog.json)return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:"FAIL",httpStatus:catalog.response?.status??null,retryCount:catalog.retryCount,error:"Contract catalog request failed",catalogEndpoint:spec.catalog};
+    const contract=spec.find(catalog.json);
+    if(!contract)return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:"NOT_LISTED",httpStatus:catalog.response.status,retryCount:catalog.retryCount,catalogCount:Array.isArray(catalog.json.data)?catalog.json.data.length:0,error:"HYPE contract not present in this exchange's public contract catalog",catalogEndpoint:spec.catalog};
+    if(!spec.active(contract))return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:"NOT_ACTIVE",httpStatus:catalog.response.status,retryCount:catalog.retryCount,exchangeState:contract.state??contract.status??null,error:"HYPE contract exists but is not marked active",catalogEndpoint:spec.catalog};
+    const candles=await fetchJsonWithRetry(spec.candle);
+    const valid=candles.response?.ok&&candles.json&&candleShapeOk(exchange,candles.json);
+    const stamp=valid?candleTimestamp(exchange,candles.json):null;
+    const age=stamp===null?null:Date.now()-stamp;
+    const fresh=age!==null&&age>=-120000&&age<=35*60000;
+    return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:valid&&fresh?"PASS":"FAIL",httpStatus:candles.response?.status??null,retryCount:catalog.retryCount+candles.retryCount,catalogCount:Array.isArray(catalog.json.data)?catalog.json.data.length:0,latestCandleAt:stamp?new Date(stamp).toISOString():null,candleAgeMinutes:age===null?null:Math.round(age/60000),fresh,catalogEndpoint:spec.catalog,candleEndpoint:spec.candle,error:!candles.response?.ok?`HTTP ${candles.response.status}`:!valid?"15m candle response invalid":!fresh?"15m candle is stale":null,latencyMs:Date.now()-started};
+  }catch(error){return {exchange,kind:"hype_15m_crosscheck",symbol:"HYPE",status:"FAIL",retryCount:0,latencyMs:Date.now()-started,error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
+}
 async function runDeepSweep(){
   const groups=new Map();
   for(const probe of allDeepProbes){if(!groups.has(probe.exchange))groups.set(probe.exchange,[]);groups.get(probe.exchange).push(probe)}
@@ -300,9 +333,9 @@ async function runDeepSweep(){
     }
     return results;
   }));
-  const results=batches.flat();
+  const results=[...batches.flat(),...(await Promise.all([runHypeSymbolProbe("MEXC"),runHypeSymbolProbe("OKX")]))];
   const catalogAudits=[await runWeexCatalogAudit()];
-  return {finishedAt:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results,catalogAudits};
+  return {finishedAt:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,notListed:results.filter(x=>x.status==="NOT_LISTED").length,failed:results.filter(x=>x.status==="FAIL"||x.status==="NOT_ACTIVE").length,total:results.length,results,catalogAudits};
 }
 
 async function runDataProbe(probe) {
@@ -404,7 +437,7 @@ small{color:#94a3b8;word-break:break-all}.summary{margin-top:16px}
 </main>
 <script>
 const btn=document.getElementById('run'), rows=document.getElementById('rows'), summary=document.getElementById('summary');\nconst dataBtn=document.getElementById('dataRun'), dataSummary=document.getElementById('dataSummary');\nconst deepBtn=document.getElementById('deepRun');
-deepBtn.addEventListener('click',async()=>{deepBtn.disabled=true;deepBtn.textContent='در حال تست عمیق...';dataSummary.textContent='در حال بررسی تایم‌فریم‌های ۱ساعت، ۲ساعت، ۴ساعت، روزانه و Funding...';try{const r=await fetch('/api/deep-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();const lines=b.results.map(x=>x.exchange+' | '+x.kind+(x.symbol?' | '+x.symbol:'')+' | '+x.status+' | '+x.latencyMs+'ms'+(x.candleAgeMinutes!==null&&x.candleAgeMinutes!==undefined?' | age '+x.candleAgeMinutes+'m':'')+(x.error?' | '+x.error:''));const catalogs=b.results.filter(x=>x.contractStats).map(x=>x.exchange+' | کل: '+x.contractStats.rawCount+' | یکتا: '+x.contractStats.uniqueSymbolCount+' | فعال: '+x.contractStats.activeCount+' | فعال USDT: '+x.contractStats.activeUsdtSettledCount+' | وضعیت نامشخص: '+x.contractStats.unknownStatusCount+' | USDT کل: '+x.contractStats.usdtSettledCount+' | قیمت زنده: '+x.contractStats.marketDataAvailableCount);const audits=(b.catalogAudits||[]).map(x=>x.exchange+' | قراردادها: '+x.contractListCount+' | تیکرها: '+x.tickerListCount+' | منطبق: '+x.matchedSymbolCount+' | منطبق با قیمت: '+x.matchedWithPriceCount+' | فقط تیکر: '+x.tickerOnlyCount);dataSummary.textContent='موفق: '+b.passed+' از '+b.total+'\\n\\nفهرست قراردادها:\\n'+catalogs.join('\\n')+'\\n\\nمقایسه منابع بازار:\\n'+audits.join('\\n')+'\\n\\nجزئیات تست‌ها:\\n'+lines.join('\\n')+'\\n\\nجزئیات JSON: /api/deep-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{deepBtn.disabled=false;deepBtn.textContent='اجرای دوباره تست تایم‌فریم‌ها و Funding'}});
+deepBtn.addEventListener('click',async()=>{deepBtn.disabled=true;deepBtn.textContent='در حال تست عمیق...';dataSummary.textContent='در حال بررسی تایم‌فریم‌های ۱ساعت، ۲ساعت، ۴ساعت، روزانه و Funding...';try{const r=await fetch('/api/deep-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();const lines=b.results.map(x=>x.exchange+' | '+x.kind+(x.symbol?' | '+x.symbol:'')+' | '+x.status+' | '+x.latencyMs+'ms'+(x.candleAgeMinutes!==null&&x.candleAgeMinutes!==undefined?' | age '+x.candleAgeMinutes+'m':'')+(x.error?' | '+x.error:''));const catalogs=b.results.filter(x=>x.contractStats).map(x=>x.exchange+' | کل: '+x.contractStats.rawCount+' | یکتا: '+x.contractStats.uniqueSymbolCount+' | فعال: '+x.contractStats.activeCount+' | فعال USDT: '+x.contractStats.activeUsdtSettledCount+' | وضعیت نامشخص: '+x.contractStats.unknownStatusCount+' | USDT کل: '+x.contractStats.usdtSettledCount+' | قیمت زنده: '+x.contractStats.marketDataAvailableCount);const audits=(b.catalogAudits||[]).map(x=>x.exchange+' | قراردادها: '+x.contractListCount+' | تیکرها: '+x.tickerListCount+' | منطبق: '+x.matchedSymbolCount+' | منطبق با قیمت: '+x.matchedWithPriceCount+' | فقط تیکر: '+x.tickerOnlyCount);dataSummary.textContent='موفق: '+b.passed+' از '+b.total+' | نماد فهرست‌نشده: '+(b.notListed||0)+' | خطا/غیرفعال: '+(b.failed||0)+'\\n\\nفهرست قراردادها:\\n'+catalogs.join('\\n')+'\\n\\nمقایسه منابع بازار:\\n'+audits.join('\\n')+'\\n\\nجزئیات تست‌ها:\\n'+lines.join('\\n')+'\\n\\nجزئیات JSON: /api/deep-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{deepBtn.disabled=false;deepBtn.textContent='اجرای دوباره تست تایم‌فریم‌ها و Funding'}});
 dataBtn.addEventListener('click',async()=>{dataBtn.disabled=true;dataBtn.textContent='در حال تست داده‌ها...';dataSummary.textContent='در حال بررسی کندل ۱۵ دقیقه و Open Interest در صرافی‌ها...';try{const r=await fetch('/api/data-test',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const b=await r.json();dataSummary.textContent='موفق: '+b.passed+' از '+b.total+'\\n'+b.results.map(x=>x.exchange+' | '+x.kind+' | '+x.status+' | '+x.latencyMs+'ms'+(x.error?' | '+x.error:'')).join('\\n')+'\\n\\nجزئیات JSON در /api/data-test';}catch(e){dataSummary.textContent='خطا: '+e.message}finally{dataBtn.disabled=false;dataBtn.textContent='اجرای دوباره تست داده‌ها'}});
 btn.addEventListener('click',async()=>{
  btn.disabled=true;btn.textContent='در حال آزمایش...';summary.textContent='درخواست‌ها به‌صورت هم‌زمان ارسال شدند.';
