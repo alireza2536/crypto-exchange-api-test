@@ -241,10 +241,19 @@ const oiHistoryProbes=[
 ];
 const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...utcDailyProbes,...symbolCoverageProbes,...oiHistoryProbes];
 async function runDeepProbe(probe) {
-  const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+  const started=Date.now();let response=null,raw="",json=null,retryCount=0;
   try {
-    const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
-    const raw=await response.text();let json;try{json=JSON.parse(raw)}catch{json=null}
+    for(let attempt=0;attempt<2;attempt++){
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+      try{
+        response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
+        raw=await response.text();try{json=JSON.parse(raw)}catch{json=null}
+      }finally{clearTimeout(timer)}
+      const apiCode=Number(json?.code??json?.returnCode);
+      const transient=(!response.ok&&[429,500,502,503,504].includes(response.status))||[100410,100429].includes(apiCode);
+      if(attempt===0&&transient){retryCount=1;await new Promise(resolve=>setTimeout(resolve,1800));continue;}
+      break;
+    }
     let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null,synthetic1dUtc=null,oiHistoryAt=null,oiHistoryAgeMinutes=null,oiHistoryFresh=null;
     if(probe.kind==="synthetic_1d_utc"&&json){synthetic1dUtc=buildSynthetic1dUtc(probe.exchange,json);schemaOk=Boolean(synthetic1dUtc);}
     if(probe.kind.startsWith("open_interest_history_")&&json&&schemaOk){oiHistoryAt=oiHistoryTimestamp(probe.exchange,json);const age=oiHistoryAt===null?null:Date.now()-oiHistoryAt;oiHistoryAgeMinutes=age===null?null:Math.round(age/60000);const maxAge=(timeframeMinutes[probe.timeframe]||60)*60000*2+300000;oiHistoryFresh=age!==null&&age>=-120000&&age<=maxAge;schemaOk=schemaOk&&oiHistoryFresh;}
@@ -256,10 +265,9 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
-  finally{clearTimeout(timer)}
-}
+  }
 async function runWeexCatalogAudit(){
   const urls=[
     "https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",
