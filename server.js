@@ -197,9 +197,10 @@ async function runDataSweep() {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Exchange API test service listening on ${PORT}`);
   // Run one diagnostic sweep after each deploy/restart so results are available in Render logs.
-  Promise.all(probes.map(runProbe)).then((results) => {
+  Promise.all(probes.map(runProbe)).then(async (results) => {
     const passed = results.filter((item) => item.status === "PASS").length;
     console.log(JSON.stringify({ event: "startup_exchange_probe", finishedAt: new Date().toISOString(), passed, total: results.length, results }));
+    await runDataSweep();
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
   });
