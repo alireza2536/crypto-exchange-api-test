@@ -149,9 +149,7 @@ function buildSynthetic1dUtc(exchange,j) {
   }
   return null;
 }
-const utcDailyProbes=[
-  {exchange:"HTX",kind:"synthetic_1d_utc",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=30",check:j=>Boolean(buildSynthetic1dUtc("HTX",j))}
-];
+const xtSymbolDetailProbes=[{exchange:"XT",kind:"contract_detail_probe",symbol:"BTC_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}];
 const synthetic2hProbes = [
   {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
   {exchange:"WEEX",kind:"synthetic_2h",check:j=>true,url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
@@ -239,7 +237,7 @@ const oiHistoryProbes=[
   {exchange:"HTX",kind:"open_interest_history_1h",timeframe:"1h",url:"https://api.hbdm.com/linear-swap-api/v1/swap_his_open_interest?contract_code=BTC-USDT&period=60min&amount_type=1&size=3",check:j=>j?.status==="ok"&&Array.isArray(j?.data?.tick)&&j.data.tick.length>0&&Number(j.data.tick[0]?.volume)>0},
   {exchange:"KuCoin",kind:"open_interest_history_15m",timeframe:"15m",url:"https://api.kucoin.com/api/ua/v2/market/open-interest?symbol=XBTUSDTM&interval=15min&pageSize=3",check:j=>String(j?.code)==="200000"&&Array.isArray(j?.data)&&j.data.length>0&&Number(j.data[0]?.openInterest)>0}
 ];
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...utcDailyProbes,...symbolCoverageProbes,...oiHistoryProbes];
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...xtSymbolDetailProbes,...symbolCoverageProbes,...oiHistoryProbes];
 async function runDeepProbe(probe) {
   const started=Date.now();let response=null,raw="",json=null,retryCount=0;
   try {
