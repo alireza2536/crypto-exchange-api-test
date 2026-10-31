@@ -99,6 +99,30 @@ const timeframeSpecs = [
   {exchange:"XT", values:{"1h":"1h","4h":"4h","1d":"1d"}, url:v=>`https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=${v}&limit=3`}
 ];
 for(const spec of timeframeSpecs) for(const [tf,value] of Object.entries(spec.values)) deepProbes.push({exchange:spec.exchange,kind:`candles_${tf}`,timeframe:tf,url:spec.url(value),check:j=>candleShapeOk(spec.exchange,j)});
+function buildSynthetic2h(exchange,j) {
+  let rows=[];
+  if(exchange==="MEXC"){
+    const d=j?.data||{};
+    rows=(d.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(d.open?.[i]),h:Number(d.high?.[i]),l:Number(d.low?.[i]),c:Number(d.close?.[i]),v:Number(d.vol?.[i]??d.volume?.[i]??0)}));
+  } else if(exchange==="WEEX"){
+    rows=(Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4]),v:Number(x?.[5]??0)}));
+  } else if(exchange==="HTX"){
+    rows=(j?.data||[]).map(x=>({t:Number(x?.id)*1000,o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close),v:Number(x?.vol??x?.amount??0)}));
+  } else if(exchange==="XT"){
+    rows=(j?.result||[]).map(x=>({t:Number(x?.t),o:Number(x?.o),h:Number(x?.h),l:Number(x?.l),c:Number(x?.c),v:Number(x?.a??x?.v??0)}));
+  }
+  rows=rows.filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c].every(Number.isFinite)&&x.c>0);
+  rows.sort((a,b)=>a.t-b.t);
+  const now=Date.now();
+  for(let i=0;i<rows.length-1;i++){
+    const a=rows[i],b=rows[i+1];
+    if(a.t%7200000===0&&b.t-a.t===3600000&&a.t+7200000<=now-120000){
+      const aggregate={startAt:new Date(a.t).toISOString(),endAt:new Date(a.t+7200000).toISOString(),open:a.o,high:Math.max(a.h,b.h),low:Math.min(a.l,b.l),close:b.c,volume:a.v+b.v,sourceBars:2};
+      if(aggregate.high>=aggregate.low&&aggregate.open>0&&aggregate.close>0&&aggregate.volume>=0)return aggregate;
+    }
+  }
+  return null;
+}
 const fundingProbes = [
   {exchange:"MEXC",kind:"funding_rate",url:"https://contract.mexc.com/api/v1/contract/ticker",check:j=>j?.success===true&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"&&Number.isFinite(Number(x.fundingRate)))},
   {exchange:"BingX",kind:"funding_rate",url:"https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex?symbol=BTC-USDT",check:j=>(j?.code===0||j?.code==="0")&&j?.data&&Number.isFinite(Number(Array.isArray(j.data)?j.data[0]?.lastFundingRate:j.data.lastFundingRate))},
@@ -108,17 +132,23 @@ const fundingProbes = [
   {exchange:"KuCoin",kind:"funding_rate",url:"https://api-futures.kucoin.com/api/v1/funding-rate/XBTUSDTM/current",check:j=>String(j?.code)==="200000"&&j?.data&&Number.isFinite(Number(j.data.value))},
   {exchange:"XT",kind:"funding_rate",url:"https://fapi.xt.com/future/market/v1/public/q/funding-rate?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&Number.isFinite(Number(j.result.fundingRate??j.result.items?.[0]?.fundingRate))}
 ];
+const synthetic2hProbes = [
+  {exchange:"MEXC",kind:"synthetic_2h",url:"https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
+  {exchange:"WEEX",kind:"synthetic_2h",url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
+  {exchange:"HTX",kind:"synthetic_2h",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=10"},
+  {exchange:"XT",kind:"synthetic_2h",url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1h&limit=10"}
+];
 const contractListProbes = [
   {exchange:"WEEX",kind:"contract_list",url:"https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",check:j=>Array.isArray(j?.symbols)&&j.symbols.some(x=>x?.symbol==="BTCUSDT"&&x?.contractType==="PERPETUAL"),count:j=>j?.symbols?.length||0},
   {exchange:"HTX",kind:"contract_list",url:"https://api.hbdm.com/linear-swap-api/v1/swap_contract_info?business_type=all",check:j=>j?.status==="ok"&&Array.isArray(j?.data)&&j.data.some(x=>x?.contract_code==="BTC-USDT"),count:j=>j?.data?.length||0}
 ];
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes];
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes];
 async function runDeepProbe(probe) {
   const started=Date.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
   try {
     const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
     const raw=await response.text();let json;try{json=JSON.parse(raw)}catch{json=null}
-    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null;
+    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null;\n    if(probe.kind==="synthetic_2h"&&json){synthetic2h=buildSynthetic2h(probe.exchange,json);schemaOk=Boolean(synthetic2h);}
     if(probe.kind.startsWith("candles_")&&schemaOk){
       latestCandleAt=candleTimestamp(probe.exchange,json);
       ageMs=latestCandleAt===null?null:Date.now()-latestCandleAt;
@@ -126,7 +156,7 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:probe.kind==="contract_list"?probe.count(json):null,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,contractCount:probe.kind==="contract_list"?probe.count(json):null,synthetic2h,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   finally{clearTimeout(timer)}
 }
