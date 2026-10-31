@@ -148,7 +148,8 @@ async function runDeepProbe(probe) {
   try {
     const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
     const raw=await response.text();let json;try{json=JSON.parse(raw)}catch{json=null}
-    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null;\n    if(probe.kind==="synthetic_2h"&&json){synthetic2h=buildSynthetic2h(probe.exchange,json);schemaOk=Boolean(synthetic2h);}
+    let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null;
+    if(probe.kind==="synthetic_2h"&&json){synthetic2h=buildSynthetic2h(probe.exchange,json);schemaOk=Boolean(synthetic2h);}
     if(probe.kind.startsWith("candles_")&&schemaOk){
       latestCandleAt=candleTimestamp(probe.exchange,json);
       ageMs=latestCandleAt===null?null:Date.now()-latestCandleAt;
