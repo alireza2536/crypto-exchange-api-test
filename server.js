@@ -167,7 +167,8 @@ async function runDataSweep() {
   const passed=results.filter(x=>x.status==="PASS").length;
   console.log(JSON.stringify({event:"startup_market_data_probe",finishedAt:new Date().toISOString(),passed,total:results.length,results}));
 }
-\nconst server = http.createServer(async (req, res) => {
+
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   res.setHeader("access-control-allow-origin", "*");
   if (url.pathname === "/health") {
