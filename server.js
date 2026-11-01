@@ -760,37 +760,57 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (url.pathname === "/api/history-depth-test") {
-    // Diagnostic only: request up to 1,200 four-hour candles once per exchange.
-    // This intentionally reports the API's actual response size; it does not claim
-    // pagination works unless enough unique, contiguous candles are returned.
-    const depthSpecs = [
-      { exchange: "MEXC", url: "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Hour4", rows: j => { const d=j?.data||{}; return (d.time||[]).map((t,i)=>({t:Number(t)*1000,c:Number(d.close?.[i])})); } },
-      { exchange: "BingX", url: "https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=4h&limit=1200", rows: j => (j?.data||[]).map(x=>({t:Number(x?.time),c:Number(x?.close)})) },
-      { exchange: "OKX", url: "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=4H&limit=300", rows: j => (j?.data||[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
-      { exchange: "WEEX", url: "https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=4h&limit=100", rows: j => (Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
-      { exchange: "HTX", url: "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=4hour&size=1200", rows: j => (j?.data||[]).map(x=>({t:Number(x?.id)*1000,c:Number(x?.close)})) },
-      { exchange: "KuCoin", url: "https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=240", rows: j => (j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,c:Number(x?.[4])})) },
-      { exchange: "XT", url: "https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=4h&limit=1200", rows: j => (Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),c:Number(x?.c)})) }
+    // Paginated 4h history validation. Each exchange has its own documented cursor/limit behavior.
+    const targetCandles = 1200, intervalMs = 4 * 60 * 60 * 1000, maxPages = 20;
+    const specs = [
+      { exchange:"MEXC", pageLimit:2000, url:()=> "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Hour4", rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,c:Number(d.close?.[i])}));} },
+      { exchange:"BingX", pageLimit:1000, url:(cursor)=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=4h&limit=1000"+(cursor?("&endTime="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.time),c:Number(x?.close)})) },
+      { exchange:"OKX", pageLimit:300, url:(cursor)=>"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=4H&limit=300"+(cursor?("&after="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
+      { exchange:"WEEX", pageLimit:100, url:(cursor)=>"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=4h&limit=100"+(cursor?("&endTime="+cursor):""), rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
+      { exchange:"HTX", pageLimit:2000, url:()=> "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=4hour&size=1200", rows:j=>(j?.data||[]).map(x=>({t:Number(x?.id)*1000,c:Number(x?.close)})) },
+      { exchange:"KuCoin", pageLimit:200, url:(cursor)=>"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=240"+(cursor?("&to="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,c:Number(x?.[4])})) },
+      { exchange:"XT", pageLimit:1200, url:()=> "https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=4h&limit=1200", rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),c:Number(x?.c)})) }
     ];
-    const results = await Promise.all(depthSpecs.map(async spec => {
-      const started=Date.now(), controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+    const results = await Promise.all(specs.map(async spec => {
+      const started=Date.now(), allRows=[], pageReports=[];
+      let cursor=null, lastHttpStatus=null, lastRaw="", lastError=null, pages=0;
       try {
-        const response=await fetch(spec.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
-        const raw=await response.text(); let json; try{json=JSON.parse(raw)}catch{json=null}
-        let rows=[]; try{rows=spec.rows(json).filter(x=>Number.isFinite(x.t)&&Number.isFinite(x.c)&&x.c>0)}catch{}
-        rows.sort((a,b)=>a.t-b.t);
-        const unique=[...new Map(rows.map(x=>[x.t,x])).values()];
-        const gaps=[]; for(let i=1;i<unique.length;i++){const delta=unique[i].t-unique[i-1].t;if(delta!==14400000)gaps.push({from:new Date(unique[i-1].t).toISOString(),to:new Date(unique[i].t).toISOString(),hours:Math.round(delta/3600000)});}
+        for(let page=0; page<maxPages && allRows.length<targetCandles; page++){
+          const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+          let response;
+          try {
+            response=await fetch(spec.url(cursor),{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
+            lastHttpStatus=response.status; lastRaw=await response.text();
+          } finally { clearTimeout(timer); }
+          let json; try{json=JSON.parse(lastRaw)}catch{json=null}
+          if(!response.ok){lastError="HTTP "+response.status;break}
+          const parsed=spec.rows(json).filter(x=>Number.isFinite(x.t)&&Number.isFinite(x.c)&&x.c>0);
+          const before=allRows.length; allRows.push(...parsed); pages++;
+          const uniqueNow=[...new Map(allRows.map(x=>[x.t,x])).values()];
+          const oldest=parsed.length?Math.min(...parsed.map(x=>x.t)):null;
+          pageReports.push({page:page+1,rows:parsed.length,uniqueTotal:uniqueNow.length,oldestAt:oldest?new Date(oldest).toISOString():null});
+          if(uniqueNow.length>=targetCandles || parsed.length===0 || oldest===null || parsed.length<Math.min(spec.pageLimit,100) && spec.exchange==="WEEX") break;
+          if(spec.exchange==="MEXC"||spec.exchange==="HTX"||spec.exchange==="XT") break;
+          const nextCursor=oldest-1;
+          if(cursor!==null && nextCursor>=cursor){lastError="Pagination cursor did not move backward";break}
+          cursor=nextCursor;
+          if(allRows.length===before && page>0){lastError="Page returned no new rows";break}
+        }
+        allRows.sort((a,b)=>a.t-b.t);
+        const unique=[...new Map(allRows.map(x=>[x.t,x])).values()];
+        const gaps=[]; for(let i=1;i<unique.length;i++){const delta=unique[i].t-unique[i-1].t;if(delta!==intervalMs)gaps.push({from:new Date(unique[i-1].t).toISOString(),to:new Date(unique[i].t).toISOString(),hours:Number((delta/3600000).toFixed(2))});}
         const spanHours=unique.length>1?(unique[unique.length-1].t-unique[0].t)/3600000:0;
         const latest=unique.length?unique[unique.length-1].t:null, ageMinutes=latest===null?null:Math.round((Date.now()-latest)/60000);
-        return {exchange:spec.exchange,status:response.ok&&unique.length>0?"RESPONSE_OK":"FAIL",httpStatus:response.status,requestedLimit:spec.exchange==="OKX"?300:1200,returnedRows:rows.length,uniqueCandles:unique.length,coverageDays:Number((spanHours/24).toFixed(2)),expectedCoverageDays:Number((1199*4/24).toFixed(2)),gapCount:gaps.length,firstCandleAt:unique.length?new Date(unique[0].t).toISOString():null,lastCandleAt:latest?new Date(latest).toISOString():null,lastCandleAgeMinutes:ageMinutes,has1200Candles:unique.length>=1200,endpoint:spec.url,latencyMs:Date.now()-started,error:!response.ok?"HTTP "+response.status:!json?"Invalid JSON":unique.length===0?"No parseable candles":null,exampleGaps:gaps.slice(0,3),preview:raw.slice(0,160)};
+        const enough=unique.length>=targetCandles;
+        return {exchange:spec.exchange,status:lastHttpStatus>=200&&lastHttpStatus<300&&unique.length?"RESPONSE_OK":"FAIL",httpStatus:lastHttpStatus,requestedCandles:targetCandles,returnedRows:allRows.length,uniqueCandles:unique.length,pages, pageReports,coverageDays:Number((spanHours/24).toFixed(2)),expectedCoverageDays:Number((1199*4/24).toFixed(2)),gapCount:gaps.length,has1200Candles:enough,historyReady:enough&&gaps.length===0&&ageMinutes!==null&&ageMinutes<=480,firstCandleAt:unique.length?new Date(unique[0].t).toISOString():null,lastCandleAt:latest?new Date(latest).toISOString():null,lastCandleAgeMinutes:ageMinutes,endpoint:spec.url(null),latencyMs:Date.now()-started,error:lastError||(!unique.length?"No parseable candles":null),exampleGaps:gaps.slice(0,3),preview:lastRaw.slice(0,120)};
       } catch(error) {
-        return {exchange:spec.exchange,status:"FAIL",httpStatus:null,requestedLimit:1200,returnedRows:0,uniqueCandles:0,coverageDays:0,expectedCoverageDays:Number((1199*4/24).toFixed(2)),gapCount:null,has1200Candles:false,endpoint:spec.url,latencyMs:Date.now()-started,error:error.name==="AbortError"?"Timeout after "+TIMEOUT_MS+" ms":String(error.message||error)};
-      } finally {clearTimeout(timer);}
+        return {exchange:spec.exchange,status:"FAIL",httpStatus:lastHttpStatus,requestedCandles:targetCandles,returnedRows:allRows.length,uniqueCandles:new Set(allRows.map(x=>x.t)).size,pages,pageReports,coverageDays:0,expectedCoverageDays:Number((1199*4/24).toFixed(2)),gapCount:null,has1200Candles:false,historyReady:false,endpoint:spec.url(null),latencyMs:Date.now()-started,error:error.name==="AbortError"?"Timeout after "+TIMEOUT_MS+" ms":String(error.message||error)};
+      }
     }));
     const passed=results.filter(x=>x.status==="RESPONSE_OK").length;
+    const ready=results.filter(x=>x.historyReady).length;
     res.writeHead(200,{"content-type":"application/json; charset=utf-8","cache-control":"no-store"});
-    return res.end(JSON.stringify({finishedAt:new Date().toISOString(),purpose:"Check real 4h candle depth for CCI(1200); this is a single-request test, not proof of pagination.",passed,total:results.length,results,warning:"A returned candle count below 1,200 means pagination or a different supported history endpoint is still required. The OKX public candles endpoint is intentionally capped at 300 per request."}));
+    return res.end(JSON.stringify({finishedAt:new Date().toISOString(),purpose:"Paginated 4h history test for CCI(1200); historyReady requires 1,200 unique candles, zero 4h gaps, and a fresh latest candle.",passed,total:results.length,historyReadyCount:ready,results,warning:"This validates BTC-USDT history only; it does not by itself confirm every symbol or production integration."}));
   }
   if (url.pathname === "/api/data-test") {
     const results = await Promise.all(dataProbes.map(runDataProbe));
