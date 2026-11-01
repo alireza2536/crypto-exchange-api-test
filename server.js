@@ -60,9 +60,12 @@ function extractOpenInterestValue(exchange, json) {
   else if (exchange === "OKX") value = json?.data?.find(x => x?.instId === "BTC-USDT-SWAP")?.oi ?? json?.data?.[0]?.oi;
   else if (exchange === "WEEX") value = json?.openInterest;
   else if (exchange === "HTX") {
-    const rows = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : [];
-    const row = rows.find(x => Number(x?.volume ?? x?.amount ?? x?.open_interest) > 0);
-    value = row?.volume ?? row?.amount ?? row?.open_interest;
+    // HTX linear-swap current OI endpoint documents data.volume as position
+    // quantity in contracts. Do not fall back to amount/trade-volume fields.
+    const row = json?.data;
+    if (row?.contract_code === "BTC-USDT" && Number(row?.volume) > 0) {
+      value = row.volume;
+    }
   } else if (exchange === "KuCoin") value = json?.data?.[0]?.openInterest;
   else if (exchange === "XT") value = json?.result?.openInterest ?? json?.result?.openInterestUsd;
   const n = Number(value);
