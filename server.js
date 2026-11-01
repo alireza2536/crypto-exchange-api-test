@@ -789,7 +789,7 @@ const server = http.createServer(async (req, res) => {
           const uniqueNow=[...new Map(allRows.map(x=>[x.t,x])).values()];
           const oldest=parsed.length?Math.min(...parsed.map(x=>x.t)):null;
           pageReports.push({page:page+1,rows:parsed.length,uniqueTotal:uniqueNow.length,oldestAt:oldest?new Date(oldest).toISOString():null});
-          if(uniqueNow.length>=targetCandles || parsed.length===0 || oldest===null || parsed.length<Math.min(spec.pageLimit,100) && spec.exchange==="WEEX") break;
+          if(uniqueNow.length>=targetCandles || parsed.length===0 || oldest===null) break;
           if(spec.exchange==="MEXC"||spec.exchange==="HTX"||spec.exchange==="XT") break;
           const nextCursor=oldest-1;
           if(cursor!==null && nextCursor>=cursor){lastError="Pagination cursor did not move backward";break}
