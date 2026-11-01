@@ -663,6 +663,82 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(status.databaseReady ? 200 : 503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     return res.end(JSON.stringify(status));
   }
+  if (url.pathname === "/api/open-interest-trend") {
+    if (!oiSnapshotPool || !oiSnapshotDbReady) {
+      res.writeHead(503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ error: "Persistent Open Interest history is not configured", status: await getOiSnapshotStatus() }));
+    }
+    const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours") || 24)));
+    const exchange = url.searchParams.get("exchange");
+    const params = [new Date(Date.now() - hours * 3600000)];
+    let filter = "collected_at >= $1 AND metric = 'open_interest_native' AND value > 0";
+    if (exchange) { params.push(exchange); filter += " AND exchange = $2"; }
+    const sql = `
+      WITH samples AS (
+        SELECT exchange, symbol, metric, value, collected_at, source_endpoint,
+          FIRST_VALUE(value) OVER (
+            PARTITION BY exchange, symbol, metric ORDER BY collected_at ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          ) AS first_value,
+          FIRST_VALUE(collected_at) OVER (
+            PARTITION BY exchange, symbol, metric ORDER BY collected_at ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          ) AS first_at,
+          FIRST_VALUE(value) OVER (
+            PARTITION BY exchange, symbol, metric ORDER BY collected_at DESC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          ) AS last_value,
+          FIRST_VALUE(collected_at) OVER (
+            PARTITION BY exchange, symbol, metric ORDER BY collected_at DESC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          ) AS last_at,
+          COUNT(*) OVER (PARTITION BY exchange, symbol, metric)::int AS sample_count
+        FROM oi_snapshots
+        WHERE ${filter}
+      )
+      SELECT DISTINCT exchange, symbol, metric,
+        first_value::text AS first_value, last_value::text AS last_value,
+        first_at, last_at, sample_count
+      FROM samples
+      WHERE sample_count >= 2
+      ORDER BY exchange, symbol
+      LIMIT 500
+    `;
+    try {
+      const result = await oiSnapshotPool.query(sql, params);
+      const trends = result.rows.map(row => {
+        const firstValue = Number(row.first_value);
+        const lastValue = Number(row.last_value);
+        const changePct = firstValue > 0 ? ((lastValue - firstValue) / firstValue) * 100 : null;
+        return {
+          exchange: row.exchange,
+          symbol: row.symbol,
+          metric: row.metric,
+          firstValue: row.first_value,
+          lastValue: row.last_value,
+          changePct: changePct === null ? null : Number(changePct.toFixed(6)),
+          firstAt: row.first_at,
+          lastAt: row.last_at,
+          sampleCount: row.sample_count,
+          elapsedMinutes: Math.max(0, Math.round((new Date(row.last_at).getTime() - new Date(row.first_at).getTime()) / 60000)),
+          units: "exchange-native; compare changes only within the same exchange and symbol",
+          sourceEndpoint: row.source_endpoint || null
+        };
+      });
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({
+        hours,
+        exchange: exchange || null,
+        count: trends.length,
+        minSamples: 2,
+        results: trends,
+        warning: "Trend is computed from stored native-unit snapshots, not a cross-exchange comparison. Verify each exchange's field semantics before using it as a trading signal."
+      }));
+    } catch (error) {
+      res.writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ error: String(error.message || error) }));
+    }
+  }
   if (url.pathname === "/api/open-interest-history") {
     if (!oiSnapshotPool || !oiSnapshotDbReady) {
       res.writeHead(503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
