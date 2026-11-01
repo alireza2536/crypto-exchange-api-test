@@ -6,6 +6,9 @@ const PORT = Number(process.env.PORT || 3000);
 const TIMEOUT_MS = 15000;
 
 const OI_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+const GOOGLE_DRIVE_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let oiDriveBackupLastAt = null;
+let oiDriveBackupLastResult = null;
 const oiSnapshotPool = process.env.DATABASE_URL
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
@@ -100,6 +103,48 @@ async function collectOpenInterestSnapshots() {
     console.log(JSON.stringify({ event: "open_interest_snapshot_collection", finishedAt: new Date().toISOString(), saved: oiSnapshotLastSaved, total: outcomes.length, failures: oiSnapshotLastFailures }));
   } finally {
     oiSnapshotCollectorRunning = false;
+  }
+}
+
+async function backupOpenInterestToGoogleDrive() {
+  const endpoint = process.env.GOOGLE_DRIVE_BACKUP_URL;
+  const secret = process.env.GOOGLE_DRIVE_BACKUP_SECRET;
+  if (!endpoint || !secret || !oiSnapshotPool || !oiSnapshotDbReady) {
+    oiDriveBackupLastResult = { ok: false, error: "Google Drive backup or database is not configured" };
+    return oiDriveBackupLastResult;
+  }
+  try {
+    const result = await oiSnapshotPool.query(
+      "SELECT exchange, symbol, metric, value::text AS value, collected_at, source_endpoint FROM oi_snapshots ORDER BY collected_at ASC"
+    );
+    const payload = {
+      secret,
+      backupType: "full_open_interest_history",
+      sourceService: "exchange-api-connectivity-test",
+      generatedAt: new Date().toISOString(),
+      recordCount: result.rowCount,
+      records: result.rows
+    };
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(60000)
+    });
+    const raw = await response.text();
+    let body;
+    try { body = JSON.parse(raw); } catch { body = { raw: raw.slice(0, 500) }; }
+    if (!response.ok || body?.ok !== true) {
+      throw new Error("Google Drive backup failed: HTTP " + response.status + " " + JSON.stringify(body).slice(0, 500));
+    }
+    oiDriveBackupLastAt = new Date().toISOString();
+    oiDriveBackupLastResult = { ok: true, backedUpRecords: result.rowCount, file: body.file || null, completedAt: oiDriveBackupLastAt };
+    console.log(JSON.stringify({ event: "google_drive_open_interest_backup", ...oiDriveBackupLastResult }));
+    return oiDriveBackupLastResult;
+  } catch (error) {
+    oiDriveBackupLastResult = { ok: false, error: String(error.message || error), attemptedAt: new Date().toISOString() };
+    console.log(JSON.stringify({ event: "google_drive_open_interest_backup", ...oiDriveBackupLastResult }));
+    return oiDriveBackupLastResult;
   }
 }
 
@@ -602,6 +647,17 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ ok: true, service: "exchange-api-connectivity-test", openInterestHistory: { configured: Boolean(oiSnapshotPool), databaseReady: oiSnapshotDbReady, collectorIntervalMinutes: OI_SNAPSHOT_INTERVAL_MS / 60000, note: oiSnapshotPool ? (oiSnapshotDbReady ? "Persistent snapshots enabled" : "Database configured but not ready") : "DATABASE_URL is not configured; historical snapshots are disabled" } }));
   }
 
+  if (url.pathname === "/api/drive-backup-status") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    return res.end(JSON.stringify({
+      configured: Boolean(process.env.GOOGLE_DRIVE_BACKUP_URL && process.env.GOOGLE_DRIVE_BACKUP_SECRET),
+      databaseReady: oiSnapshotDbReady,
+      intervalHours: GOOGLE_DRIVE_BACKUP_INTERVAL_MS / 3600000,
+      lastBackupAt: oiDriveBackupLastAt,
+      lastResult: oiDriveBackupLastResult
+    }));
+  }
+
   if (url.pathname === "/api/open-interest-status") {
     const status = await getOiSnapshotStatus();
     res.writeHead(status.databaseReady ? 200 : 503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -660,6 +716,8 @@ server.listen(PORT, "0.0.0.0", () => {
       if (ready) {
         await collectOpenInterestSnapshots();
         setInterval(collectOpenInterestSnapshots, OI_SNAPSHOT_INTERVAL_MS).unref();
+        await backupOpenInterestToGoogleDrive();
+        setInterval(backupOpenInterestToGoogleDrive, GOOGLE_DRIVE_BACKUP_INTERVAL_MS).unref();
       }
     });
   } else {
