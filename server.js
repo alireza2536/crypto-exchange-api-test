@@ -839,6 +839,9 @@ server.listen(PORT, "0.0.0.0", () => {
     await runDataSweep();
     const deep = await runDeepSweep();
     console.log(JSON.stringify({ event: "startup_deep_market_probe", ...deep }));
+    const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
+    const historyBody = await historyResponse.json();
+    console.log(JSON.stringify({ event: "startup_history_depth_probe", httpStatus: historyResponse.status, ...historyBody }));
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
   });
