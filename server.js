@@ -767,9 +767,9 @@ const server = http.createServer(async (req, res) => {
       { exchange: "MEXC", url: "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Hour4", rows: j => { const d=j?.data||{}; return (d.time||[]).map((t,i)=>({t:Number(t)*1000,c:Number(d.close?.[i])})); } },
       { exchange: "BingX", url: "https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=4h&limit=1200", rows: j => (j?.data||[]).map(x=>({t:Number(x?.time),c:Number(x?.close)})) },
       { exchange: "OKX", url: "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=4H&limit=300", rows: j => (j?.data||[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
-      { exchange: "WEEX", url: "https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=4h&limit=1200", rows: j => (Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
+      { exchange: "WEEX", url: "https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=4h&limit=100", rows: j => (Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
       { exchange: "HTX", url: "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=4hour&size=1200", rows: j => (j?.data||[]).map(x=>({t:Number(x?.id)*1000,c:Number(x?.close)})) },
-      { exchange: "KuCoin", url: "https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=240", rows: j => (j?.data||[]).map(x=>({t:Number(x?.[0])*1000,c:Number(x?.[4])})) },
+      { exchange: "KuCoin", url: "https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=240", rows: j => (j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,c:Number(x?.[4])})) },
       { exchange: "XT", url: "https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=4h&limit=1200", rows: j => (Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),c:Number(x?.c)})) }
     ];
     const results = await Promise.all(depthSpecs.map(async spec => {
