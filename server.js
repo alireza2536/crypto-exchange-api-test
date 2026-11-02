@@ -323,7 +323,7 @@ async function backupOpenInterestToGoogleDrive() {
 
     while (batches < OI_ARCHIVE_MAX_BATCHES_PER_RUN) {
       const result = await oiSnapshotPool.query(
-        "SELECT id::text AS id, exchange, symbol, metric, value::text AS value, collected_at, source_endpoint FROM oi_snapshots WHERE id > $1 ORDER BY id ASC LIMIT $2",
+        "SELECT id::text AS id, exchange, symbol, metric, value::text AS value, collected_at, source_endpoint FROM oi_snapshots WHERE id > $1 ORDER BY oi_snapshots.id ASC LIMIT $2",
         [cursor.toString(), OI_ARCHIVE_BATCH_SIZE]
       );
       if (!result.rows.length) break;
