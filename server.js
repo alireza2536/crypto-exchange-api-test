@@ -764,7 +764,7 @@ const server = http.createServer(async (req, res) => {
     const targetCandles = 1200, intervalMs = 4 * 60 * 60 * 1000, maxPages = 20;
     const specs = [
       { exchange:"MEXC", pageLimit:2000, url:()=> "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Hour4", rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,c:Number(d.close?.[i])}));} },
-      { exchange:"BingX", pageLimit:1000, url:(cursor)=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=4h&limit=1000"+(cursor?("&endTime="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.time),c:Number(x?.close)})) },
+      { exchange:"BingX", pageLimit:1000, url:(cursor)=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=4h&limit=1000"+(cursor?("&startTime="+(cursor-999*intervalMs)+"&endTime="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.time),c:Number(x?.close)})) },
       { exchange:"OKX", pageLimit:300, url:(cursor)=>"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=4H&limit=300"+(cursor?("&after="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
       { exchange:"WEEX", pageLimit:100, url:(cursor)=>"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=4h&limit=100"+(cursor?("&startTime="+(cursor-99*intervalMs)+"&endTime="+cursor):""), rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
       { exchange:"HTX", pageLimit:2000, url:()=> "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=4hour&size=1200", rows:j=>(j?.data||[]).map(x=>({t:Number(x?.id)*1000,c:Number(x?.close)})) },
@@ -779,11 +779,20 @@ const server = http.createServer(async (req, res) => {
           const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
           let response;
           try {
-            response=await fetch(spec.url(cursor),{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
-            lastHttpStatus=response.status; lastRaw=await response.text();
+            for(let attempt=0;attempt<3;attempt++){
+              response=await fetch(spec.url(cursor),{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
+              lastHttpStatus=response.status; lastRaw=await response.text();
+              let retryJson; try{retryJson=JSON.parse(lastRaw)}catch{retryJson=null}
+              if(attempt<2 && response.ok && spec.exchange==="BingX" && [100410,100429].includes(Number(retryJson?.code))){
+                await new Promise(resolve=>setTimeout(resolve,2000*(attempt+1)));
+                continue;
+              }
+              break;
+            }
           } finally { clearTimeout(timer); }
           let json; try{json=JSON.parse(lastRaw)}catch{json=null}
           if(!response.ok){lastError="HTTP "+response.status;break}
+          if(spec.exchange==="BingX" && [100410,100429].includes(Number(json?.code))){lastError="BingX temporary API error "+json.code+": "+String(json?.msg||"");break}
           const parsed=spec.rows(json).filter(x=>Number.isFinite(x.t)&&Number.isFinite(x.c)&&x.c>0);
           const before=allRows.length; allRows.push(...parsed); pages++;
           const uniqueNow=[...new Map(allRows.map(x=>[x.t,x])).values()];
