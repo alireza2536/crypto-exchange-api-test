@@ -18,7 +18,7 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
     steps:
       - name: Wake service and check health
         env:
@@ -60,4 +60,29 @@ jobs:
             sleep 10
           done
           echo "ERROR: Open Interest collection is stale or has saved no snapshots."
+          exit 1
+
+      - name: Verify Google Drive backup
+        env:
+          BACKUP_STATUS_URL: https://exchange-api-connectivity-test.onrender.com/api/drive-backup-status
+        run: |
+          set -eu
+          for attempt in 1 2 3 4 5 6 7 8 9; do
+            if curl --silent --show-error --fail --max-time 25 "$BACKUP_STATUS_URL" -o backup-status.json; then
+              cat backup-status.json
+              if node -e '
+                const fs=require("fs");
+                const s=JSON.parse(fs.readFileSync("backup-status.json","utf8"));
+                const r=s.lastResult;
+                const age=s.lastBackupAt ? (Date.now()-Date.parse(s.lastBackupAt))/3600000 : Infinity;
+                if (!s.configured || !s.databaseReady || !r?.ok || !(r.backedUpRecords > 0) || !r.file || !Number.isFinite(age) || age < -0.1 || age > 7) process.exit(1);
+              '; then
+                echo "Google Drive backup is configured and a recent backup succeeded."
+                exit 0
+              fi
+            fi
+            echo "Google Drive backup is not yet confirmed (attempt $attempt)"
+            sleep 10
+          done
+          echo "ERROR: Google Drive backup is missing, stale, or unsuccessful."
           exit 1
