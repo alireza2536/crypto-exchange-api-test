@@ -407,15 +407,16 @@ const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...syn
 async function runDeepProbe(probe) {
   const started=Date.now();let response=null,raw="",json=null,retryCount=0;
   try {
-    for(let attempt=0;attempt<2;attempt++){
+    const maxAttempts=probe.exchange==="MEXC"?4:3;
+    for(let attempt=0;attempt<maxAttempts;attempt++){
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
       try{
         response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
         raw=await response.text();try{json=JSON.parse(raw)}catch{json=null}
       }finally{clearTimeout(timer)}
       const apiCode=Number(json?.code??json?.returnCode);
-      const transient=(!response.ok&&[429,500,502,503,504].includes(response.status))||[100410,100429].includes(apiCode);
-      if(attempt===0&&transient){retryCount=1;await new Promise(resolve=>setTimeout(resolve,1800));continue;}
+      const transient=(!response.ok&&[429,500,502,503,504].includes(response.status))||[100410,100429].includes(apiCode)||(probe.exchange==="MEXC"&&apiCode===510);
+      if(attempt<maxAttempts-1&&transient){retryCount=attempt+1;await new Promise(resolve=>setTimeout(resolve,1200*(attempt+1)));continue;}
       break;
     }
     let schemaOk=Boolean(json&&probe.check(json)),latestCandleAt=null,ageMs=null,fresh=null,synthetic2h=null,synthetic1dUtc=null,oiHistoryAt=null,oiHistoryAgeMinutes=null,oiHistoryFresh=null;
@@ -429,7 +430,7 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   }
 async function runWeexCatalogAudit(){
