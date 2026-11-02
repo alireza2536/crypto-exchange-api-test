@@ -6,6 +6,7 @@ const PORT = Number(process.env.PORT || 3000);
 const TIMEOUT_MS = 15000;
 
 const OI_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+const OI_FULL_UNIVERSE_COLLECTION_ENABLED = process.env.OI_FULL_UNIVERSE_COLLECTION_ENABLED === "true";
 const GOOGLE_DRIVE_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let oiDriveBackupLastAt = null;
 let oiDriveBackupLastResult = null;
@@ -341,11 +342,12 @@ async function getOiSnapshotStatus() {
   const status = {
     configured: Boolean(oiSnapshotPool),
     databaseReady: oiSnapshotDbReady,
-    collectorIntervalMinutes: OI_SNAPSHOT_INTERVAL_MS / 60000,
+    collectionEnabled: OI_FULL_UNIVERSE_COLLECTION_ENABLED,
+    collectorIntervalMinutes: OI_FULL_UNIVERSE_COLLECTION_ENABLED ? OI_SNAPSHOT_INTERVAL_MS / 60000 : null,
     lastRunAt: oiSnapshotLastRunAt,
     lastSaved: oiSnapshotLastSaved,
     lastFailures: oiSnapshotLastFailures,
-    note: oiSnapshotPool ? (oiSnapshotDbReady ? "Open Interest snapshots are being stored; values use each exchange's native units and should not be compared directly across exchanges." : "DATABASE_URL is set but database initialization has not succeeded.") : "Persistent history is not enabled. Configure DATABASE_URL with a PostgreSQL database to enable periodic snapshots.",
+    note: !oiSnapshotPool ? "Persistent history is not enabled. Configure DATABASE_URL with a PostgreSQL database to enable periodic snapshots." : !oiSnapshotDbReady ? "DATABASE_URL is set but database initialization has not succeeded." : !OI_FULL_UNIVERSE_COLLECTION_ENABLED ? "Full-universe collection is paused while a safe free-tier storage and archive policy is chosen. Existing history is preserved." : "Open Interest snapshots are being stored; values use each exchange's native units and should not be compared directly across exchanges.",
   };
   if (oiSnapshotPool && oiSnapshotDbReady) {
     try {
@@ -1059,8 +1061,12 @@ server.listen(PORT, "0.0.0.0", () => {
     initOiSnapshotDb().then(async ready => {
       console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready, error: oiSnapshotDbError }));
       if (ready) {
-        await collectOpenInterestSnapshots();
-        setInterval(collectOpenInterestSnapshots, OI_SNAPSHOT_INTERVAL_MS).unref();
+        if (OI_FULL_UNIVERSE_COLLECTION_ENABLED) {
+          await collectOpenInterestSnapshots();
+          setInterval(collectOpenInterestSnapshots, OI_SNAPSHOT_INTERVAL_MS).unref();
+        } else {
+          console.log(JSON.stringify({ event: "open_interest_collection_paused", reason: "OI_FULL_UNIVERSE_COLLECTION_ENABLED is not true; preserving existing history while storage/archive policy is confirmed" }));
+        }
         await backupOpenInterestToGoogleDrive();
         // Check every 10 minutes so a transient Drive timeout is retried promptly.
         // A new full backup is only sent after the configured 6-hour interval, unless the previous attempt failed.
