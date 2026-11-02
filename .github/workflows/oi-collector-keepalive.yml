@@ -2,7 +2,7 @@ name: Keep Open Interest collector awake
 
 on:
   schedule:
-    - cron: "7,17,27,37,47,57 * * * *"
+    - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
   push:
     branches:
@@ -18,22 +18,46 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 4
     steps:
-      - name: Check collector health endpoint
+      - name: Wake service and check health
         env:
           HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health
         run: |
           set -eu
           echo "Trigger event: ${GITHUB_EVENT_NAME}"
           echo "Started at (UTC): $(date -u +%FT%TZ)"
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5 6; do
             if curl --silent --show-error --fail --max-time 35 "$HEALTH_URL" -o health.json; then
               cat health.json
               node -e 'const fs=require("fs"); const h=JSON.parse(fs.readFileSync("health.json","utf8")); if (!h.ok || !h.openInterestHistory?.configured || !h.openInterestHistory?.databaseReady) { console.error("Collector or database is not ready", h); process.exit(1); }'
-              exit 0
+              break
             fi
             echo "Health request failed (attempt $attempt)"
+            if [ "$attempt" -eq 6 ]; then exit 1; fi
             sleep 5
           done
+
+      - name: Verify Open Interest collection is fresh
+        env:
+          STATUS_URL: https://exchange-api-connectivity-test.onrender.com/api/open-interest-status
+        run: |
+          set -eu
+          for attempt in 1 2 3 4 5 6 7 8 9; do
+            if curl --silent --show-error --fail --max-time 25 "$STATUS_URL" -o oi-status.json; then
+              cat oi-status.json
+              if node -e '
+                const fs=require("fs");
+                const s=JSON.parse(fs.readFileSync("oi-status.json","utf8"));
+                const age=s.lastRunAt ? (Date.now()-Date.parse(s.lastRunAt))/60000 : Infinity;
+                if (!s.configured || !s.databaseReady || !Number.isFinite(age) || age < -2 || age > 15 || !(s.lastSaved > 0)) process.exit(1);
+              '; then
+                echo "Open Interest collection is fresh and saved at least one snapshot."
+                exit 0
+              fi
+            fi
+            echo "Open Interest collection is not yet fresh/complete (attempt $attempt)"
+            sleep 10
+          done
+          echo "ERROR: Open Interest collection is stale or has saved no snapshots."
           exit 1
