@@ -2,7 +2,7 @@ name: Keep Open Interest collector awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
   push:
     branches:
@@ -25,6 +25,8 @@ jobs:
           HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health
         run: |
           set -eu
+          echo "Trigger event: ${GITHUB_EVENT_NAME}"
+          echo "Started at (UTC): $(date -u +%FT%TZ)"
           for attempt in 1 2 3; do
             if curl --silent --show-error --fail --max-time 35 "$HEALTH_URL" -o health.json; then
               cat health.json
