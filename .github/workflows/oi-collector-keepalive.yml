@@ -1,0 +1,34 @@
+name: Keep Open Interest collector awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oi-collector-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check collector health endpoint
+        env:
+          HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health
+        run: |
+          set -eu
+          for attempt in 1 2 3; do
+            if curl --silent --show-error --fail --max-time 35 "$HEALTH_URL" -o health.json; then
+              cat health.json
+              node -e 'const fs=require("fs"); const h=JSON.parse(fs.readFileSync("health.json","utf8")); if (!h.ok || !h.openInterestHistory?.configured || !h.openInterestHistory?.databaseReady) { console.error("Collector or database is not ready", h); process.exit(1); }'
+              exit 0
+            fi
+            echo "Health request failed (attempt $attempt)"
+            sleep 5
+          done
+          exit 1
