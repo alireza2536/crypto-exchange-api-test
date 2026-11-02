@@ -10,6 +10,10 @@ const OI_FULL_UNIVERSE_COLLECTION_ENABLED = process.env.OI_FULL_UNIVERSE_COLLECT
 const GOOGLE_DRIVE_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let oiDriveBackupLastAt = null;
 let oiDriveBackupLastResult = null;
+let oiDriveBackupRunning = false;
+const OI_ARCHIVE_BATCH_SIZE = 500;
+const OI_ARCHIVE_MAX_BATCHES_PER_RUN = 30;
+const OI_RETENTION_DAYS = 7;
 const oiDatabaseConnectionString = process.env.DATABASE_URL
   ? (() => {
       // When PGSSLMODE=require, let the explicit Pool SSL options below control
@@ -52,6 +56,15 @@ async function initOiSnapshotDb() {
       )
     `);
     await oiSnapshotPool.query("CREATE INDEX IF NOT EXISTS oi_snapshots_exchange_time_idx ON oi_snapshots (exchange, collected_at DESC)");
+    await oiSnapshotPool.query(`
+      CREATE TABLE IF NOT EXISTS oi_archive_state (
+        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+        last_archived_id BIGINT NOT NULL DEFAULT 0,
+        last_archive_at TIMESTAMPTZ,
+        last_archived_count BIGINT NOT NULL DEFAULT 0
+      )
+    `);
+    await oiSnapshotPool.query("INSERT INTO oi_archive_state (singleton) VALUES (TRUE) ON CONFLICT (singleton) DO NOTHING");
     oiSnapshotDbReady = true;
     oiSnapshotDbError = null;
     return true;
@@ -291,42 +304,117 @@ async function collectOpenInterestSnapshots() {
 async function backupOpenInterestToGoogleDrive() {
   const endpoint = process.env.GOOGLE_DRIVE_BACKUP_URL;
   const secret = process.env.GOOGLE_DRIVE_BACKUP_SECRET;
+  if (oiDriveBackupRunning) {
+    return { ok: false, skipped: true, error: "Google Drive archive is already running" };
+  }
   if (!endpoint || !secret || !oiSnapshotPool || !oiSnapshotDbReady) {
     oiDriveBackupLastResult = { ok: false, error: "Google Drive backup or database is not configured" };
     return oiDriveBackupLastResult;
   }
+
+  oiDriveBackupRunning = true;
   try {
-    const result = await oiSnapshotPool.query(
-      "SELECT exchange, symbol, metric, value::text AS value, collected_at, source_endpoint FROM oi_snapshots ORDER BY collected_at ASC"
+    const stateResult = await oiSnapshotPool.query(
+      "SELECT last_archived_id::text AS last_archived_id FROM oi_archive_state WHERE singleton = TRUE"
     );
-    const payload = {
-      secret,
-      backupType: "full_open_interest_history",
-      sourceService: "exchange-api-connectivity-test",
-      generatedAt: new Date().toISOString(),
-      recordCount: result.rowCount,
-      records: result.rows
-    };
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", "accept": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(60000)
-    });
-    const raw = await response.text();
-    let body;
-    try { body = JSON.parse(raw); } catch { body = { raw: raw.slice(0, 500) }; }
-    if (!response.ok || body?.ok !== true) {
-      throw new Error("Google Drive backup failed: HTTP " + response.status + " " + JSON.stringify(body).slice(0, 500));
+    let cursor = BigInt(stateResult.rows[0]?.last_archived_id || "0");
+    let backedUpRecords = 0;
+    let batches = 0;
+
+    while (batches < OI_ARCHIVE_MAX_BATCHES_PER_RUN) {
+      const result = await oiSnapshotPool.query(
+        "SELECT id::text AS id, exchange, symbol, metric, value::text AS value, collected_at, source_endpoint FROM oi_snapshots WHERE id > $1 ORDER BY id ASC LIMIT $2",
+        [cursor.toString(), OI_ARCHIVE_BATCH_SIZE]
+      );
+      if (!result.rows.length) break;
+
+      const firstId = result.rows[0].id;
+      const lastId = result.rows[result.rows.length - 1].id;
+      const payload = {
+        secret,
+        backupType: "open_interest_archive_chunk",
+        sourceService: "exchange-api-connectivity-test",
+        generatedAt: new Date().toISOString(),
+        firstId,
+        lastId,
+        recordCount: result.rowCount,
+        records: result.rows
+      };
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", "accept": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(60000)
+      });
+      const raw = await response.text();
+      let body;
+      try { body = JSON.parse(raw); } catch { body = { raw: raw.slice(0, 500) }; }
+      if (!response.ok || body?.ok !== true) {
+        throw new Error("Google Drive archive failed for IDs " + firstId + "-" + lastId + ": HTTP " + response.status + " " + JSON.stringify(body).slice(0, 500));
+      }
+
+      await oiSnapshotPool.query(
+        "UPDATE oi_archive_state SET last_archived_id = $1, last_archive_at = NOW(), last_archived_count = last_archived_count + $2 WHERE singleton = TRUE",
+        [lastId, result.rowCount]
+      );
+      cursor = BigInt(lastId);
+      backedUpRecords += result.rowCount;
+      batches += 1;
+      console.log(JSON.stringify({
+        event: "google_drive_open_interest_archive_chunk",
+        ok: true,
+        firstId,
+        lastId,
+        records: result.rowCount,
+        file: body.file || null
+      }));
     }
+
+    const remaining = await oiSnapshotPool.query(
+      "SELECT EXISTS (SELECT 1 FROM oi_snapshots WHERE id > $1) AS has_more",
+      [cursor.toString()]
+    );
+    if (remaining.rows[0]?.has_more) {
+      oiDriveBackupLastResult = {
+        ok: false,
+        partial: true,
+        backedUpRecords,
+        batches,
+        lastArchivedId: cursor.toString(),
+        attemptedAt: new Date().toISOString(),
+        error: "Archive continues in the next scheduled pass; database rows were not pruned"
+      };
+      console.log(JSON.stringify({ event: "google_drive_open_interest_backup", ...oiDriveBackupLastResult }));
+      return oiDriveBackupLastResult;
+    }
+
+    // Prune only after the archive cursor has caught up with every row currently in the database.
+    const prune = await oiSnapshotPool.query(
+      "DELETE FROM oi_snapshots WHERE id <= $1 AND collected_at < NOW() - ($2 * INTERVAL '1 day')",
+      [cursor.toString(), OI_RETENTION_DAYS]
+    );
     oiDriveBackupLastAt = new Date().toISOString();
-    oiDriveBackupLastResult = { ok: true, backedUpRecords: result.rowCount, file: body.file || null, completedAt: oiDriveBackupLastAt };
+    oiDriveBackupLastResult = {
+      ok: true,
+      backedUpRecords,
+      batches,
+      lastArchivedId: cursor.toString(),
+      retainedDays: OI_RETENTION_DAYS,
+      prunedRecords: prune.rowCount,
+      completedAt: oiDriveBackupLastAt
+    };
     console.log(JSON.stringify({ event: "google_drive_open_interest_backup", ...oiDriveBackupLastResult }));
     return oiDriveBackupLastResult;
   } catch (error) {
-    oiDriveBackupLastResult = { ok: false, error: String(error.message || error), attemptedAt: new Date().toISOString() };
+    oiDriveBackupLastResult = {
+      ok: false,
+      error: String(error.message || error),
+      attemptedAt: new Date().toISOString()
+    };
     console.log(JSON.stringify({ event: "google_drive_open_interest_backup", ...oiDriveBackupLastResult }));
     return oiDriveBackupLastResult;
+  } finally {
+    oiDriveBackupRunning = false;
   }
 }
 
@@ -863,7 +951,10 @@ const server = http.createServer(async (req, res) => {
       databaseReady: oiSnapshotDbReady,
       intervalHours: GOOGLE_DRIVE_BACKUP_INTERVAL_MS / 3600000,
       lastBackupAt: oiDriveBackupLastAt,
-      lastResult: oiDriveBackupLastResult
+      lastResult: oiDriveBackupLastResult,
+      archiveState: oiSnapshotDbReady ? (await oiSnapshotPool.query("SELECT last_archived_id::text AS last_archived_id, last_archive_at, last_archived_count::text AS last_archived_count FROM oi_archive_state WHERE singleton = TRUE")).rows[0] || null : null,
+      retentionDays: OI_RETENTION_DAYS,
+      archiveBatchSize: OI_ARCHIVE_BATCH_SIZE
     }));
   }
 
