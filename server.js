@@ -522,28 +522,45 @@ async function runDeepSweep(){
 }
 
 async function runDataProbe(probe) {
-  const started=Date.now(), controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
-  try {
-    const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
-    const raw=await response.text(); let json; try{json=JSON.parse(raw)}catch{json=null}
-    let schemaOk=Boolean(json&&probe.check(json));
-    let latestCandleAt=null,candleAgeMinutes=null,fresh=null;
-    if(probe.kind.startsWith("candles_")&&schemaOk){
-      const tf=probe.kind.slice("candles_".length);
-      const stamp=candleTimestamp(probe.exchange,json);
-      const age=stamp===null?null:Date.now()-stamp;
-      const maxAge=(timeframeMinutes[tf]||15)*60000*2+300000;
-      fresh=age!==null&&age>=-120000&&age<=maxAge;
-      schemaOk=schemaOk&&fresh;
-      latestCandleAt=stamp?new Date(stamp).toISOString():null;
-      candleAgeMinutes=age===null?null:Math.round(age/60000);
-    }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,schemaOk,latestCandleAt,candleAgeMinutes,fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":"Response schema/value check failed"):null};
-  } catch(error) {
-    return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)};
-  } finally {clearTimeout(timer)}
+  const started=Date.now();
+  const maxAttempts=probe.exchange==="MEXC"?4:2;
+  let lastResult=null;
+  for(let attempt=0;attempt<maxAttempts;attempt++){
+    const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+    try{
+      const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
+      const raw=await response.text(); let json; try{json=JSON.parse(raw)}catch{json=null}
+      const transient= response.status===429 || response.status>=500 || (probe.exchange==="MEXC" && Number(json?.code)===510);
+      if(transient && attempt<maxAttempts-1){
+        lastResult={httpStatus:response.status,raw,json};
+        clearTimeout(timer);
+        await new Promise(resolve=>setTimeout(resolve,1200*(attempt+1)));
+        continue;
+      }
+      let schemaOk=Boolean(json&&probe.check(json));
+      let latestCandleAt=null,candleAgeMinutes=null,fresh=null;
+      if(probe.kind.startsWith("candles_")&&schemaOk){
+        const tf=probe.kind.slice("candles_".length);
+        const stamp=candleTimestamp(probe.exchange,json);
+        const age=stamp===null?null:Date.now()-stamp;
+        const maxAge=(timeframeMinutes[tf]||15)*60000*2+300000;
+        fresh=age!==null&&age>=-120000&&age<=maxAge;
+        schemaOk=schemaOk&&fresh;
+        latestCandleAt=stamp?new Date(stamp).toISOString():null;
+        candleAgeMinutes=age===null?null:Math.round(age/60000);
+      }
+      return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount:attempt,schemaOk,latestCandleAt,candleAgeMinutes,fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
+    }catch(error){
+      if(attempt<maxAttempts-1&&(error.name==="AbortError"||probe.exchange==="MEXC")){
+        clearTimeout(timer);
+        await new Promise(resolve=>setTimeout(resolve,1200*(attempt+1)));
+        continue;
+      }
+      return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,retryCount:attempt,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)};
+    }finally{clearTimeout(timer)}
+  }
+  return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:lastResult?.httpStatus??null,latencyMs:Date.now()-started,retryCount:maxAttempts-1,schemaOk:false,endpoint:probe.url,preview:(lastResult?.raw||"").slice(0,220),error:"Transient API error after retries"};
 }
-
 async function runProbe(probe) {
   const started = Date.now();
   const controller = new AbortController();
