@@ -14,6 +14,9 @@ let oiDriveBackupRunning = false;
 const OI_ARCHIVE_BATCH_SIZE = 500;
 const OI_ARCHIVE_MAX_BATCHES_PER_RUN = 30;
 const OI_RETENTION_DAYS = 7;
+const OI_ROTATING_BATCH_SIZE = 50;
+const OI_BULK_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const OI_ARCHIVE_PRUNE_ENABLED = process.env.OI_ARCHIVE_PRUNE_ENABLED === "true";
 const oiDatabaseConnectionString = process.env.DATABASE_URL
   ? (() => {
       // When PGSSLMODE=require, let the explicit Pool SSL options below control
@@ -65,6 +68,20 @@ async function initOiSnapshotDb() {
       )
     `);
     await oiSnapshotPool.query("INSERT INTO oi_archive_state (singleton) VALUES (TRUE) ON CONFLICT (singleton) DO NOTHING");
+    await oiSnapshotPool.query(`
+      CREATE TABLE IF NOT EXISTS oi_collection_state (
+        exchange TEXT PRIMARY KEY,
+        cursor_index INTEGER NOT NULL DEFAULT 0,
+        last_bulk_collection_at TIMESTAMPTZ,
+        last_collection_at TIMESTAMPTZ,
+        last_discovered_count INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    await oiSnapshotPool.query(`
+      INSERT INTO oi_collection_state (exchange)
+      VALUES ('MEXC'), ('BingX'), ('OKX'), ('WEEX'), ('HTX'), ('KuCoin'), ('XT')
+      ON CONFLICT (exchange) DO NOTHING
+    `);
     oiSnapshotDbReady = true;
     oiSnapshotDbError = null;
     return true;
@@ -121,7 +138,7 @@ function toSnapshot(exchange, symbol, value, sourceEndpoint) {
   return oi === null ? null : { exchange, symbol, metric: "open_interest_native", value: oi, source_endpoint: sourceEndpoint };
 }
 
-async function collectExchangeOi(exchange) {
+async function collectExchangeOi(exchange, options = {}) {
   const source = {
     MEXC: "https://api.mexc.com/api/v1/contract/ticker",
     BingX: "https://open-api.bingx.com/openApi/swap/v2/quote/contracts",
@@ -206,10 +223,17 @@ async function collectExchangeOi(exchange) {
       ).map(row => row.symbol))];
     }
     if (!symbols.length) throw new Error(exchange + " returned no active USDT contract symbols");
+    const totalDiscoveredSymbols = symbols.length;
+    const cursorIndex = Math.max(0, Number(options.cursorIndex) || 0) % totalDiscoveredSymbols;
+    const batchLimit = Math.max(1, Number(options.batchLimit) || OI_ROTATING_BATCH_SIZE);
+    const batchSymbols = Array.from(
+      { length: Math.min(batchLimit, totalDiscoveredSymbols) },
+      (_, i) => symbols[(cursorIndex + i) % totalDiscoveredSymbols]
+    );
     // BingX's public OI endpoint is rate-limited; serialize requests to avoid bursts.
     const concurrency = exchange === "BingX" ? 1 : exchange === "WEEX" ? 4 : 8;
     let lastBingXRequestAt = 0;
-    const results = await mapWithConcurrency(symbols, concurrency, async symbol => {
+    const results = await mapWithConcurrency(batchSymbols, concurrency, async symbol => {
       if (exchange === "BingX") {
         const wait = 1050 - (Date.now() - lastBingXRequestAt);
         if (lastBingXRequestAt && wait > 0) await sleep(wait);
@@ -244,24 +268,41 @@ async function collectExchangeOi(exchange) {
       if (result) snapshots.push(result);
     }
     snapshots.partialFailures = results.filter(result => result?._error).length;
-    snapshots.discoveredSymbols = symbols.length;
-    if (!snapshots.length) throw new Error("No valid Open Interest values returned for discovered USDT contracts");
+    snapshots.discoveredSymbols = totalDiscoveredSymbols;
+    snapshots.batchSize = batchSymbols.length;
+    snapshots.nextCursorIndex = (cursorIndex + batchSymbols.length) % totalDiscoveredSymbols;
+    if (!snapshots.length) throw new Error("No valid Open Interest values returned for selected USDT contract batch");
   }
   if (!snapshots.length) throw new Error("No active USDT contract Open Interest values parsed");
   return snapshots;
 }
 
 async function collectOpenInterestSnapshots() {
-  if (!oiSnapshotPool || !oiSnapshotDbReady || oiSnapshotCollectorRunning) return;
+  if (!oiSnapshotPool || !oiSnapshotDbReady || oiSnapshotCollectorRunning || !OI_FULL_UNIVERSE_COLLECTION_ENABLED) return;
   oiSnapshotCollectorRunning = true;
   oiSnapshotLastRunAt = new Date().toISOString();
   oiSnapshotLastSaved = 0;
   oiSnapshotLastFailures = [];
   try {
     const exchanges = ["MEXC", "BingX", "OKX", "WEEX", "HTX", "KuCoin", "XT"];
+    const stateResult = await oiSnapshotPool.query(
+      "SELECT exchange, cursor_index, last_bulk_collection_at FROM oi_collection_state WHERE exchange = ANY($1::text[])",
+      [exchanges]
+    );
+    const stateByExchange = new Map(stateResult.rows.map(row => [row.exchange, row]));
+    const bulkExchanges = new Set(["MEXC", "OKX", "KuCoin"]);
     const outcomes = await Promise.all(exchanges.map(async exchange => {
+      const state = stateByExchange.get(exchange) || { cursor_index: 0, last_bulk_collection_at: null };
+      const isBulk = bulkExchanges.has(exchange);
+      if (isBulk && state.last_bulk_collection_at &&
+          Date.now() - Date.parse(state.last_bulk_collection_at) < OI_BULK_REFRESH_INTERVAL_MS) {
+        return { exchange, status: "SKIPPED", reason: "Bulk refresh interval has not elapsed" };
+      }
       try {
-        const snapshots = await collectExchangeOi(exchange);
+        const snapshots = await collectExchangeOi(exchange, {
+          cursorIndex: state.cursor_index,
+          batchLimit: isBulk ? Number.MAX_SAFE_INTEGER : OI_ROTATING_BATCH_SIZE
+        });
         let saved = 0;
         for (let offset = 0; offset < snapshots.length; offset += 100) {
           const batch = snapshots.slice(offset, offset + 100);
@@ -278,12 +319,25 @@ async function collectOpenInterestSnapshots() {
           saved += result.rowCount;
         }
         const partialFailures = snapshots.partialFailures || 0;
+        if (isBulk) {
+          await oiSnapshotPool.query(
+            "UPDATE oi_collection_state SET last_bulk_collection_at = NOW(), last_collection_at = NOW(), last_discovered_count = $2 WHERE exchange = $1",
+            [exchange, snapshots.discoveredSymbols ?? snapshots.length]
+          );
+        } else {
+          await oiSnapshotPool.query(
+            "UPDATE oi_collection_state SET cursor_index = $2, last_collection_at = NOW(), last_discovered_count = $3 WHERE exchange = $1",
+            [exchange, snapshots.nextCursorIndex ?? state.cursor_index, snapshots.discoveredSymbols ?? snapshots.length]
+          );
+        }
         return {
           exchange,
           status: partialFailures ? "PARTIAL" : "SAVED",
           discovered: snapshots.discoveredSymbols ?? snapshots.length,
+          batchSize: snapshots.batchSize ?? snapshots.length,
           saved,
           partialFailures,
+          nextCursorIndex: snapshots.nextCursorIndex ?? null,
           ...(partialFailures ? { error: partialFailures + " symbol requests failed; successful symbols were still saved" } : {})
         };
       } catch (error) {
@@ -291,11 +345,19 @@ async function collectOpenInterestSnapshots() {
       }
     }));
     oiSnapshotLastSaved = outcomes.reduce((sum, item) => sum + (item.saved || 0), 0);
-    oiSnapshotLastFailures = outcomes.filter(item => item.status !== "SAVED").map(item => ({
+    oiSnapshotLastFailures = outcomes.filter(item => !["SAVED", "SKIPPED"].includes(item.status)).map(item => ({
       exchange: item.exchange, error: item.error || "Partial collection", status: item.status,
-      discovered: item.discovered || 0, saved: item.saved || 0, partialFailures: item.partialFailures || 0
+      discovered: item.discovered || 0, batchSize: item.batchSize || 0,
+      saved: item.saved || 0, partialFailures: item.partialFailures || 0
     }));
-    console.log(JSON.stringify({ event: "open_interest_snapshot_collection", finishedAt: new Date().toISOString(), saved: oiSnapshotLastSaved, outcomes, failures: oiSnapshotLastFailures }));
+    console.log(JSON.stringify({
+      event: "open_interest_snapshot_collection",
+      finishedAt: new Date().toISOString(),
+      saved: oiSnapshotLastSaved,
+      schedule: { rotatingBatchSize: OI_ROTATING_BATCH_SIZE, bulkRefreshMinutes: OI_BULK_REFRESH_INTERVAL_MS / 60000 },
+      outcomes,
+      failures: oiSnapshotLastFailures
+    }));
   } finally {
     oiSnapshotCollectorRunning = false;
   }
@@ -388,11 +450,13 @@ async function backupOpenInterestToGoogleDrive() {
       return oiDriveBackupLastResult;
     }
 
-    // Prune only after the archive cursor has caught up with every row currently in the database.
-    const prune = await oiSnapshotPool.query(
-      "DELETE FROM oi_snapshots WHERE id <= $1 AND collected_at < NOW() - ($2 * INTERVAL '1 day')",
-      [cursor.toString(), OI_RETENTION_DAYS]
-    );
+    // Keep pruning disabled until a real Drive read-back/restore test is verified.
+    const prune = OI_ARCHIVE_PRUNE_ENABLED
+      ? await oiSnapshotPool.query(
+          "DELETE FROM oi_snapshots WHERE id <= $1 AND collected_at < NOW() - ($2 * INTERVAL '1 day')",
+          [cursor.toString(), OI_RETENTION_DAYS]
+        )
+      : { rowCount: 0 };
     oiDriveBackupLastAt = new Date().toISOString();
     oiDriveBackupLastResult = {
       ok: true,
@@ -400,6 +464,7 @@ async function backupOpenInterestToGoogleDrive() {
       batches,
       lastArchivedId: cursor.toString(),
       retainedDays: OI_RETENTION_DAYS,
+      pruneEnabled: OI_ARCHIVE_PRUNE_ENABLED,
       prunedRecords: prune.rowCount,
       completedAt: oiDriveBackupLastAt
     };
@@ -954,7 +1019,10 @@ const server = http.createServer(async (req, res) => {
       lastResult: oiDriveBackupLastResult,
       archiveState: oiSnapshotDbReady ? (await oiSnapshotPool.query("SELECT last_archived_id::text AS last_archived_id, last_archive_at, last_archived_count::text AS last_archived_count FROM oi_archive_state WHERE singleton = TRUE")).rows[0] || null : null,
       retentionDays: OI_RETENTION_DAYS,
-      archiveBatchSize: OI_ARCHIVE_BATCH_SIZE
+      pruneEnabled: OI_ARCHIVE_PRUNE_ENABLED,
+      archiveBatchSize: OI_ARCHIVE_BATCH_SIZE,
+      collectionSchedule: { rotatingBatchSize: OI_ROTATING_BATCH_SIZE, bulkRefreshMinutes: OI_BULK_REFRESH_INTERVAL_MS / 60000 },
+      collectionState: oiSnapshotDbReady ? (await oiSnapshotPool.query("SELECT exchange, cursor_index, last_collection_at, last_bulk_collection_at, last_discovered_count FROM oi_collection_state ORDER BY exchange")).rows : []
     }));
   }
 
