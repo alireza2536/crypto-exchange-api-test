@@ -9,9 +9,19 @@ const OI_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
 const GOOGLE_DRIVE_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let oiDriveBackupLastAt = null;
 let oiDriveBackupLastResult = null;
-const oiSnapshotPool = process.env.DATABASE_URL
+const oiDatabaseConnectionString = process.env.DATABASE_URL
+  ? (() => {
+      // When PGSSLMODE=require, let the explicit Pool SSL options below control
+      // certificate handling. node-postgres otherwise lets sslmode in the URL
+      // override the supplied ssl object, which can reject Supabase's pooler cert.
+      const connectionUrl = new URL(process.env.DATABASE_URL);
+      if (process.env.PGSSLMODE === "require") connectionUrl.searchParams.delete("sslmode");
+      return connectionUrl.toString();
+    })()
+  : null;
+const oiSnapshotPool = oiDatabaseConnectionString
   ? new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: oiDatabaseConnectionString,
       ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : undefined,
       connectionTimeoutMillis: 5000,
       idleTimeoutMillis: 30000,
