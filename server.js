@@ -61,22 +61,165 @@ async function initOiSnapshotDb() {
   }
 }
 
-function extractOpenInterestValue(exchange, json) {
-  let value = null;
+async function fetchPublicJson(url, timeoutMs = TIMEOUT_MS) {
+  const response = await fetch(url, {
+    headers: { accept: "application/json", "user-agent": "exchange-api-connectivity-test/1.0" },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  const raw = await response.text();
+  let json;
+  try { json = JSON.parse(raw); } catch { throw new Error("Non-JSON response from " + new URL(url).host); }
+  if (!response.ok) throw new Error("HTTP " + response.status + " from " + new URL(url).host);
+  return json;
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      try { results[index] = await worker(items[index], index); }
+      catch (error) { results[index] = { _error: String(error.message || error) }; }
+    }
+  }));
+  return results;
+}
+function positiveOi(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+function rowsFrom(value) { return Array.isArray(value) ? value : value ? [value] : []; }
+function usdtSymbol(exchange, symbol) {
+  if (typeof symbol !== "string") return false;
+  if (exchange === "MEXC") return symbol.endsWith("_USDT");
+  if (exchange === "BingX") return symbol.endsWith("-USDT");
+  if (exchange === "OKX") return symbol.endsWith("-USDT-SWAP");
+  if (exchange === "WEEX") return symbol.toUpperCase().endsWith("USDT");
+  if (exchange === "HTX") return symbol.endsWith("-USDT");
+  if (exchange === "KuCoin") return symbol.toUpperCase().endsWith("USDTM");
+  if (exchange === "XT") return symbol.toLowerCase().endsWith("_usdt");
+  return false;
+}
+function toSnapshot(exchange, symbol, value, sourceEndpoint) {
+  const oi = positiveOi(value);
+  return oi === null ? null : { exchange, symbol, metric: "open_interest_native", value: oi, source_endpoint: sourceEndpoint };
+}
+
+async function collectExchangeOi(exchange) {
+  const source = {
+    MEXC: "https://api.mexc.com/api/v1/contract/ticker",
+    BingX: "https://open-api.bingx.com/openApi/swap/v2/quote/contracts",
+    OKX: "https://www.okx.com/api/v5/public/open-interest?instType=SWAP",
+    WEEX: "https://api-contract.weex.com/capi/v3/market/ticker/24hr",
+    HTX: "https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",
+    KuCoin: "https://api.kucoin.com/api/ua/v2/market/open-interest",
+    XT: "https://fapi.xt.com/future/market/v1/public/q/tickers"
+  }[exchange];
+  const snapshots = [];
   if (exchange === "MEXC") {
-    const row = Array.isArray(json?.data) ? json.data.find(x => x?.symbol === "BTC_USDT") : json?.data;
-    value = row?.holdVol;
-  } else if (exchange === "BingX") value = json?.data?.openInterest;
-  else if (exchange === "OKX") value = json?.data?.find(x => x?.instId === "BTC-USDT-SWAP")?.oi ?? json?.data?.[0]?.oi;
-  else if (exchange === "WEEX") value = json?.openInterest;
-  else if (exchange === "HTX") {
-    const rows = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : [];
-    const row = rows.find(x => Number(x?.volume ?? x?.amount ?? x?.open_interest) > 0);
-    value = row?.volume ?? row?.amount ?? row?.open_interest;
-  } else if (exchange === "KuCoin") value = Array.isArray(json?.data) ? json.data[0]?.openInterest : json?.data?.openInterest;
-  else if (exchange === "XT") value = json?.result?.openInterest ?? json?.result?.openInterestUsd;
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : null;
+    const j = await fetchPublicJson(source);
+    if (!(j?.success === true || j?.code === 0)) throw new Error("MEXC ticker schema/status check failed");
+    for (const row of rowsFrom(j.data)) {
+      if (usdtSymbol(exchange, row?.symbol)) {
+        const snap = toSnapshot(exchange, row.symbol, row.holdVol, source);
+        if (snap) snapshots.push(snap);
+      }
+    }
+  } else if (exchange === "OKX") {
+    const j = await fetchPublicJson(source);
+    if (String(j?.code) !== "0" || !Array.isArray(j.data)) throw new Error("OKX open-interest schema/status check failed");
+    for (const row of j.data) {
+      if (usdtSymbol(exchange, row?.instId)) {
+        const snap = toSnapshot(exchange, row.instId, row.oi, source);
+        if (snap) snapshots.push(snap);
+      }
+    }
+  } else if (exchange === "KuCoin") {
+    const j = await fetchPublicJson(source);
+    if (String(j?.code) !== "200000") throw new Error("KuCoin open-interest schema/status check failed");
+    const rows = rowsFrom(j.data?.data ?? j.data?.items ?? j.data?.list ?? j.data);
+    for (const row of rows) {
+      const symbol = row?.symbol ?? row?.contractSymbol;
+      if (usdtSymbol(exchange, symbol)) {
+        const snap = toSnapshot(exchange, symbol, row?.openInterest ?? row?.value, source);
+        if (snap) snapshots.push(snap);
+      }
+    }
+    if (!snapshots.length) throw new Error("KuCoin returned no parseable USDT-M open-interest rows");
+  } else {
+    let symbols = [];
+    if (exchange === "BingX") {
+      const j = await fetchPublicJson(source);
+      if (!(j?.code === 0 || j?.code === "0") || !Array.isArray(j.data)) throw new Error("BingX contract-list schema/status check failed");
+      symbols = [...new Set(j.data.filter(row => {
+        if (!usdtSymbol(exchange, row?.symbol)) return false;
+        const status = String(row?.status ?? "").toUpperCase();
+        return !status || ["TRADING", "ACTIVE", "ONLINE", "1"].includes(status);
+      }).map(row => row.symbol))];
+    } else if (exchange === "WEEX") {
+      const j = await fetchPublicJson(source);
+      const rows = Array.isArray(j) ? j : rowsFrom(j?.data ?? j?.result);
+      symbols = [...new Set(rows.map(row => row?.symbol).filter(symbol => usdtSymbol(exchange, symbol)))];
+    } else if (exchange === "HTX") {
+      const j = await fetchPublicJson(source);
+      if (j?.status !== "ok" || !Array.isArray(j.data)) throw new Error("HTX contract-list schema/status check failed");
+      symbols = [...new Set(j.data.filter(row => {
+        const symbol = row?.contract_code;
+        const quote = String(row?.settle_currency ?? row?.quote_currency ?? "");
+        const active = row?.contract_status === undefined || Number(row.contract_status) === 1;
+        return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active;
+      }).map(row => row.contract_code))];
+    } else if (exchange === "XT") {
+      const j = await fetchPublicJson(source);
+      if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT ticker-list schema/status check failed");
+      symbols = [...new Set(j.result.map(row => row?.s).filter(symbol => usdtSymbol(exchange, symbol)))];
+    }
+    if (!symbols.length) throw new Error(exchange + " returned no active USDT contract symbols");
+    // BingX's public OI endpoint is rate-limited; serialize requests to avoid bursts.
+    const concurrency = exchange === "BingX" ? 1 : exchange === "WEEX" ? 4 : 8;
+    let lastBingXRequestAt = 0;
+    const results = await mapWithConcurrency(symbols, concurrency, async symbol => {
+      if (exchange === "BingX") {
+        const wait = 1050 - (Date.now() - lastBingXRequestAt);
+        if (lastBingXRequestAt && wait > 0) await sleep(wait);
+        lastBingXRequestAt = Date.now();
+      }
+      const endpoint = exchange === "BingX"
+        ? "https://open-api.bingx.com/openApi/swap/v2/quote/openInterest?symbol=" + encodeURIComponent(symbol)
+        : exchange === "WEEX"
+          ? "https://api-contract.weex.com/capi/v3/market/openInterest?symbol=" + encodeURIComponent(symbol)
+          : exchange === "HTX"
+            ? "https://api.hbdm.com/linear-swap-api/v1/swap_open_interest?contract_code=" + encodeURIComponent(symbol)
+            : "https://fapi.xt.com/future/market/v1/public/contract/open-interest?symbol=" + encodeURIComponent(symbol);
+      const j = await fetchPublicJson(endpoint);
+      let value = null;
+      if (exchange === "BingX") {
+        if (!(j?.code === 0 || j?.code === "0")) throw new Error("API code " + j?.code);
+        value = j?.data?.openInterest;
+      } else if (exchange === "WEEX") value = j?.openInterest;
+      else if (exchange === "HTX") {
+        if (j?.status !== "ok") throw new Error("HTX status " + j?.status);
+        const rows = rowsFrom(j.data);
+        const row = rows.find(x => x?.contract_code === symbol) ?? rows[0];
+        value = row?.volume ?? row?.amount ?? row?.open_interest;
+      } else {
+        if (j?.returnCode !== 0) throw new Error("XT returnCode " + j?.returnCode);
+        value = j?.result?.openInterest ?? j?.result?.openInterestUsd;
+      }
+      return toSnapshot(exchange, symbol, value, endpoint);
+    });
+    for (const result of results) {
+      if (result?._error) continue;
+      if (result) snapshots.push(result);
+    }
+    snapshots.partialFailures = results.filter(result => result?._error).length;
+    snapshots.discoveredSymbols = symbols.length;
+    if (!snapshots.length) throw new Error("No valid Open Interest values returned for discovered USDT contracts");
+  }
+  if (!snapshots.length) throw new Error("No active USDT contract Open Interest values parsed");
+  return snapshots;
 }
 
 async function collectOpenInterestSnapshots() {
@@ -86,31 +229,44 @@ async function collectOpenInterestSnapshots() {
   oiSnapshotLastSaved = 0;
   oiSnapshotLastFailures = [];
   try {
-    const probes = dataProbes.filter(p => p.kind === "open_interest" || p.kind === "open_interest_15m");
-    const outcomes = await Promise.all(probes.map(async probe => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const exchanges = ["MEXC", "BingX", "OKX", "WEEX", "HTX", "KuCoin", "XT"];
+    const outcomes = await Promise.all(exchanges.map(async exchange => {
       try {
-        const response = await fetch(probe.url, { headers: { accept: "application/json", "user-agent": "exchange-api-connectivity-test/1.0" }, signal: controller.signal });
-        const raw = await response.text();
-        let json;
-        try { json = JSON.parse(raw); } catch { json = null; }
-        if (!response.ok || !json || !probe.check(json)) throw new Error(!response.ok ? `HTTP ${response.status}` : "API schema/value check failed");
-        const value = extractOpenInterestValue(probe.exchange, json);
-        if (value === null) throw new Error("Open Interest value could not be extracted");
-        const symbol = probe.exchange === "MEXC" ? "BTC_USDT" : probe.exchange === "OKX" ? "BTC-USDT-SWAP" : probe.exchange === "HTX" ? "BTC-USDT" : probe.exchange === "KuCoin" ? "XBTUSDTM" : probe.exchange === "XT" ? "btc_usdt" : "BTCUSDT";
-        await oiSnapshotPool.query(
-          "INSERT INTO oi_snapshots (exchange, symbol, metric, value, source_endpoint) VALUES ($1,$2,$3,$4,$5)",
-          [probe.exchange, symbol, "open_interest_native", value, probe.url]
-        );
-        return { exchange: probe.exchange, status: "SAVED" };
+        const snapshots = await collectExchangeOi(exchange);
+        let saved = 0;
+        for (let offset = 0; offset < snapshots.length; offset += 100) {
+          const batch = snapshots.slice(offset, offset + 100);
+          const params = [];
+          const tuples = batch.map((row, i) => {
+            const base = i * 5;
+            params.push(row.exchange, row.symbol, row.metric, row.value, row.source_endpoint);
+            return "($" + (base + 1) + ",$" + (base + 2) + ",$" + (base + 3) + ",$" + (base + 4) + ",$" + (base + 5) + ")";
+          });
+          const result = await oiSnapshotPool.query(
+            "INSERT INTO oi_snapshots (exchange, symbol, metric, value, source_endpoint) VALUES " + tuples.join(",") + " ON CONFLICT DO NOTHING",
+            params
+          );
+          saved += result.rowCount;
+        }
+        const partialFailures = snapshots.partialFailures || 0;
+        return {
+          exchange,
+          status: partialFailures ? "PARTIAL" : "SAVED",
+          discovered: snapshots.discoveredSymbols ?? snapshots.length,
+          saved,
+          partialFailures,
+          ...(partialFailures ? { error: partialFailures + " symbol requests failed; successful symbols were still saved" } : {})
+        };
       } catch (error) {
-        return { exchange: probe.exchange, status: "FAIL", error: String(error.message || error) };
-      } finally { clearTimeout(timer); }
+        return { exchange, status: "FAIL", error: String(error.message || error) };
+      }
     }));
-    oiSnapshotLastSaved = outcomes.filter(x => x.status === "SAVED").length;
-    oiSnapshotLastFailures = outcomes.filter(x => x.status === "FAIL");
-    console.log(JSON.stringify({ event: "open_interest_snapshot_collection", finishedAt: new Date().toISOString(), saved: oiSnapshotLastSaved, total: outcomes.length, failures: oiSnapshotLastFailures }));
+    oiSnapshotLastSaved = outcomes.reduce((sum, item) => sum + (item.saved || 0), 0);
+    oiSnapshotLastFailures = outcomes.filter(item => item.status !== "SAVED").map(item => ({
+      exchange: item.exchange, error: item.error || "Partial collection", status: item.status,
+      discovered: item.discovered || 0, saved: item.saved || 0, partialFailures: item.partialFailures || 0
+    }));
+    console.log(JSON.stringify({ event: "open_interest_snapshot_collection", finishedAt: new Date().toISOString(), saved: oiSnapshotLastSaved, outcomes, failures: oiSnapshotLastFailures }));
   } finally {
     oiSnapshotCollectorRunning = false;
   }
