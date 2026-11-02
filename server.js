@@ -148,6 +148,14 @@ async function backupOpenInterestToGoogleDrive() {
   }
 }
 
+async function maybeBackupOpenInterestToGoogleDrive() {
+  const lastSuccessMs = oiDriveBackupLastAt ? Date.parse(oiDriveBackupLastAt) : 0;
+  if (lastSuccessMs && Date.now() - lastSuccessMs < GOOGLE_DRIVE_BACKUP_INTERVAL_MS) return;
+  const lastAttempt = oiDriveBackupLastResult?.attemptedAt || oiDriveBackupLastResult?.completedAt || oiDriveBackupLastAt;
+  if (lastAttempt && Date.now() - Date.parse(lastAttempt) < 10 * 60 * 1000) return;
+  await backupOpenInterestToGoogleDrive();
+}
+
 async function getOiSnapshotStatus() {
   const status = {
     configured: Boolean(oiSnapshotPool),
@@ -873,7 +881,9 @@ server.listen(PORT, "0.0.0.0", () => {
         await collectOpenInterestSnapshots();
         setInterval(collectOpenInterestSnapshots, OI_SNAPSHOT_INTERVAL_MS).unref();
         await backupOpenInterestToGoogleDrive();
-        setInterval(backupOpenInterestToGoogleDrive, GOOGLE_DRIVE_BACKUP_INTERVAL_MS).unref();
+        // Check every 10 minutes so a transient Drive timeout is retried promptly.
+        // A new full backup is only sent after the configured 6-hour interval, unless the previous attempt failed.
+        setInterval(maybeBackupOpenInterestToGoogleDrive, 10 * 60 * 1000).unref();
       }
     });
   } else {
