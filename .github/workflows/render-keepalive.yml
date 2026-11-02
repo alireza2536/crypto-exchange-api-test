@@ -1,0 +1,19 @@
+name: Keep Render test service awake
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            "https://exchange-api-connectivity-test.onrender.com/health"
