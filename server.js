@@ -112,21 +112,28 @@ async function collectExchangeOi(exchange) {
     MEXC: "https://api.mexc.com/api/v1/contract/ticker",
     BingX: "https://open-api.bingx.com/openApi/swap/v2/quote/contracts",
     OKX: "https://www.okx.com/api/v5/public/open-interest?instType=SWAP",
-    WEEX: "https://api-contract.weex.com/capi/v3/market/ticker/24hr",
+    WEEX: "https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",
     HTX: "https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",
     KuCoin: "https://api.kucoin.com/api/ua/v2/market/open-interest",
-    XT: "https://fapi.xt.com/future/market/v1/public/q/tickers"
+    XT: "https://fapi.xt.com/future/market/v1/public/symbol/list"
   }[exchange];
   const snapshots = [];
   if (exchange === "MEXC") {
-    const j = await fetchPublicJson(source);
-    if (!(j?.success === true || j?.code === 0)) throw new Error("MEXC ticker schema/status check failed");
-    for (const row of rowsFrom(j.data)) {
-      if (usdtSymbol(exchange, row?.symbol)) {
-        const snap = toSnapshot(exchange, row.symbol, row.holdVol, source);
-        if (snap) snapshots.push(snap);
-      }
+    const [tickers, contracts] = await Promise.all([
+      fetchPublicJson(source),
+      fetchPublicJson("https://api.mexc.com/api/v1/contract/detail")
+    ]);
+    if (!(tickers?.success === true || tickers?.code === 0) || !(contracts?.success === true || contracts?.code === 0) || !Array.isArray(contracts.data)) {
+      throw new Error("MEXC ticker/contract catalog schema check failed");
     }
+    const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
+    for (const contract of contracts.data) {
+      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol)) continue;
+      const ticker = tickerBySymbol.get(contract.symbol);
+      const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
+      if (snap) snapshots.push(snap);
+    }
+    if (!snapshots.length) throw new Error("MEXC returned no active USDT contract OI values");
   } else if (exchange === "OKX") {
     const j = await fetchPublicJson(source);
     if (String(j?.code) !== "0" || !Array.isArray(j.data)) throw new Error("OKX open-interest schema/status check failed");
@@ -160,21 +167,29 @@ async function collectExchangeOi(exchange) {
       }).map(row => row.symbol))];
     } else if (exchange === "WEEX") {
       const j = await fetchPublicJson(source);
-      const rows = Array.isArray(j) ? j : rowsFrom(j?.data ?? j?.result);
-      symbols = [...new Set(rows.map(row => row?.symbol).filter(symbol => usdtSymbol(exchange, symbol)))];
+      if (!Array.isArray(j?.symbols)) throw new Error("WEEX contract-list schema check failed");
+      symbols = [...new Set(j.symbols.filter(row => {
+        const status = String(row?.status ?? "").toUpperCase();
+        return row?.contractType === "PERPETUAL" && usdtSymbol(exchange, row?.symbol) &&
+          (!status || ["TRADING", "OPEN", "1"].includes(status)) &&
+          String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT";
+      }).map(row => row.symbol))];
     } else if (exchange === "HTX") {
       const j = await fetchPublicJson(source);
       if (j?.status !== "ok" || !Array.isArray(j.data)) throw new Error("HTX contract-list schema/status check failed");
       symbols = [...new Set(j.data.filter(row => {
         const symbol = row?.contract_code;
         const quote = String(row?.settle_currency ?? row?.quote_currency ?? "");
-        const active = row?.contract_status === undefined || Number(row.contract_status) === 1;
+        const active = Number(row?.contract_status) === 1;
         return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active;
       }).map(row => row.contract_code))];
     } else if (exchange === "XT") {
       const j = await fetchPublicJson(source);
-      if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT ticker-list schema/status check failed");
-      symbols = [...new Set(j.result.map(row => row?.s).filter(symbol => usdtSymbol(exchange, symbol)))];
+      if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT contract-list schema/status check failed");
+      symbols = [...new Set(j.result.filter(row =>
+        usdtSymbol(exchange, row?.symbol) && row?.tradeSwitch === true &&
+        String(row?.settleCoin ?? row?.quoteCoin ?? "USDT").toUpperCase() === "USDT"
+      ).map(row => row.symbol))];
     }
     if (!symbols.length) throw new Error(exchange + " returned no active USDT contract symbols");
     // BingX's public OI endpoint is rate-limited; serialize requests to avoid bursts.
