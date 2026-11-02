@@ -63,7 +63,7 @@ function extractOpenInterestValue(exchange, json) {
     const rows = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : [];
     const row = rows.find(x => Number(x?.volume ?? x?.amount ?? x?.open_interest) > 0);
     value = row?.volume ?? row?.amount ?? row?.open_interest;
-  } else if (exchange === "KuCoin") value = json?.data?.[0]?.openInterest;
+  } else if (exchange === "KuCoin") value = Array.isArray(json?.data) ? json.data[0]?.openInterest : json?.data?.openInterest;
   else if (exchange === "XT") value = json?.result?.openInterest ?? json?.result?.openInterestUsd;
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -223,7 +223,7 @@ const dataProbes = [
   { exchange:"HTX", kind:"candles_15m", url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=15min&size=3", check:j=>j?.status==="ok" && Array.isArray(j.data) && j.data.length>0 && Number(j.data[0]?.close)>0 },
   { exchange:"HTX", kind:"open_interest", url:"https://api.hbdm.com/linear-swap-api/v1/swap_open_interest?contract_code=BTC-USDT", check:j=>j?.status==="ok" && j?.data && (Array.isArray(j.data) ? j.data.some(x=>Number(x?.volume??x?.amount??x?.open_interest)>0) : Number(j.data.volume??j.data.amount??j.data.open_interest)>0) },
   { exchange:"KuCoin", kind:"candles_15m", url:"https://api.kucoin.com/api/ua/v2/market/kline?symbol=XBTUSDTM&tradeType=FUTURES&klineType=TRADE&interval=15min", check:j=>String(j?.code)==="200000" && Array.isArray(j?.data?.list) && j.data.list.length>0 && Number(j.data.list[0]?.[4])>0 },
-  { exchange:"KuCoin", kind:"open_interest_15m", url:"https://api.kucoin.com/api/ua/v2/market/open-interest?symbol=XBTUSDTM&interval=15min&pageSize=3", check:j=>String(j?.code)==="200000" && Array.isArray(j?.data) && j.data.length>0 && Number(j.data[0]?.openInterest)>0 },
+  { exchange:"KuCoin", kind:"open_interest", url:"https://api.kucoin.com/api/ua/v1/market/open-interest?symbol=XBTUSDTM", check:j=>String(j?.code)==="200000" && (Array.isArray(j?.data) ? j.data.some(x=>Number(x?.openInterest)>0) : Number(j?.data?.openInterest)>0) },
   { exchange:"XT", kind:"candles_15m", url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=15m&limit=3", check:j=>j?.returnCode===0 && (Array.isArray(j?.result) ? j.result.length>0 : Array.isArray(j?.result?.items) && j.result.items.length>0) },
   { exchange:"XT", kind:"open_interest", url:"https://fapi.xt.com/future/market/v1/public/contract/open-interest?symbol=btc_usdt", check:j=>j?.returnCode===0 && j?.result && Number(j.result.openInterest??j.result.openInterestUsd)>0 },
 ];
