@@ -1385,7 +1385,25 @@ server.listen(PORT, "0.0.0.0", () => {
     console.log(JSON.stringify({ event: "startup_exchange_probe", finishedAt: new Date().toISOString(), passed, total: results.length, results }));
     await runDataSweep();
     const deep = await runDeepSweep();
-    console.log(JSON.stringify({ event: "startup_deep_market_probe", ...deep }));
+    console.log(JSON.stringify({
+      event: "startup_deep_market_probe",
+      finishedAt: deep.finishedAt, passed: deep.passed, notListed: deep.notListed, failed: deep.failed, total: deep.total,
+      results: (deep.results || []).map(item => ({
+        exchange: item.exchange, kind: item.kind, symbol: item.symbol, status: item.status,
+        httpStatus: item.httpStatus, error: item.error,
+        contractStats: item.contractStats ? {
+          rawCount: item.contractStats.rawCount, normalizedCount: item.contractStats.normalizedCount,
+          uniqueSymbolCount: item.contractStats.uniqueSymbolCount, activeCount: item.contractStats.activeCount,
+          usdtSettledCount: item.contractStats.usdtSettledCount, activeUsdtSettledCount: item.contractStats.activeUsdtSettledCount,
+          classificationSummary: item.contractStats.classificationSummary
+        } : null,
+        contractClassification: item.contractClassification || null,
+        groupCatalogSummary: item.groupCatalogSummary || null,
+        spotCatalogSummary: item.kind === "spot_catalog_probe" ? {
+          count: item.spotCatalogSummary?.count, categoryCounts: item.spotCatalogSummary?.categoryCounts
+        } : null
+      }))
+    }));
     const compactFailures = deep.results.filter(x => x.status !== "PASS" && x.status !== "NOT_LISTED")
       .map(x => ({ exchange: x.exchange, kind: x.kind, symbol: x.symbol ?? null, status: x.status, httpStatus: x.httpStatus ?? null, error: x.error ?? null }));
     const xtDetails = deep.results.filter(x => x.exchange === "XT" && x.kind === "contract_detail_probe");
