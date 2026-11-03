@@ -295,7 +295,7 @@ async function collectExchangeOi(exchange, options = {}) {
       // XT contract rows include an official `plates` array. Derive the TradFi category IDs
       // dynamically from the official plate catalog rather than maintaining a guessed ticker list.
       const tradfiPlates = plateCatalog.result.filter(row =>
-        /^(tradfi|forex|tokenized stocks|commodities|index|indices)$/i.test(String(row?.plate ?? row?.name ?? "").trim())
+        /^(tradfi|forex|tokenized stocks|commodities|index|indices|pre.?market)$/i.test(String(row?.plate ?? row?.name ?? "").trim())
       ).map(row => ({ id: Number(row?.id), name: String(row?.plate ?? row?.name ?? "").trim() }))
         .filter(row => Number.isFinite(row.id));
       const tradfiPlateIds = new Set(tradfiPlates.map(row => row.id));
