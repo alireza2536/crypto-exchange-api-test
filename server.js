@@ -137,8 +137,15 @@ function isExplicitTradFiContract(row) {
   const normalized = fields
     .filter(value => value !== null && value !== undefined && String(value).trim() !== "")
     .map(value => String(value).trim().toLowerCase().replace(/[\s_-]+/g, ""));
+  const names = [
+    row?.baseCoinName, row?.baseCoinNameEn, row?.enName, row?.enDesc,
+    row?.cnName, row?.cnDesc, row?.displayName, row?.description
+  ].filter(value => value !== null && value !== undefined && String(value).trim() !== "")
+    .map(value => String(value).trim().toLowerCase());
   return normalized.some(value =>
     /^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(value)
+  ) || names.some(value =>
+    /(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(value)
   );
 }
 function isBingXTradFiSymbol(symbol) {
