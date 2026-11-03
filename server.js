@@ -287,8 +287,8 @@ async function collectExchangeOi(exchange, options = {}) {
     snapshots.partialFailures = failedResults.length;
     snapshots.partialFailureDetails = failedResults;
     snapshots.nextRetrySymbols = [...new Set([
-      ...deferredRetrySymbols,
-      ...failedResults.map(item => item.symbol)
+      ...failedResults.map(item => item.symbol),
+      ...deferredRetrySymbols
     ])];
     snapshots.discoveredSymbols = totalDiscoveredSymbols;
     snapshots.batchSize = batchSymbols.length;
