@@ -191,7 +191,7 @@ async function collectExchangeOi(exchange, options = {}) {
     }
     const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
     for (const contract of contracts.data) {
-      const typeLabel = Number(contract?.typeLabel ?? 0); // Only official normal/crypto label 0 is accepted; all nonzero labels are excluded conservatively.
+      const typeLabel = Number(contract?.typeLabel); // Require the official crypto/normal label explicitly; missing classification is not accepted.
       if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0 || isExplicitTradFiContract(contract)) continue;
       const ticker = tickerBySymbol.get(contract.symbol);
       const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
@@ -271,21 +271,48 @@ async function collectExchangeOi(exchange, options = {}) {
           String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT";
       }).map(row => row.symbol))];
     } else if (exchange === "HTX") {
-      const j = await fetchPublicJson(source);
+      const [j, spotCatalog] = await Promise.all([
+        fetchPublicJson(source),
+        fetchPublicJson("https://api.huobi.pro/v1/common/symbols")
+      ]);
       if (j?.status !== "ok" || !Array.isArray(j.data)) throw new Error("HTX contract-list schema/status check failed");
+      if (spotCatalog?.status !== "ok" || !Array.isArray(spotCatalog.data)) throw new Error("HTX official spot-symbol catalog schema/status check failed");
+      // HTX's public swap catalog has no reliable crypto-vs-TradFi flag.
+      // Keep only bases that also appear in HTX's official active spot catalog;
+      // this excludes stock/index/commodity contracts without relying on a guessed ticker blacklist.
+      const cryptoSpotBases = new Set(spotCatalog.data
+        .filter(row => String(row?.state ?? "").toLowerCase() === "online")
+        .map(row => String(row?.["base-currency"] ?? "").trim().toUpperCase())
+        .filter(Boolean));
+      if (!cryptoSpotBases.size) throw new Error("HTX official spot catalog has no active base assets; refusing an unverified collection universe");
       symbols = [...new Set(j.data.filter(row => {
         const symbol = row?.contract_code;
+        const base = String(row?.symbol ?? String(symbol ?? "").split("-")[0]).trim().toUpperCase();
         const quote = String(row?.settle_currency ?? row?.quote_currency ?? "");
         const active = Number(row?.contract_status) === 1;
-        return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active && !isExplicitTradFiContract(row);
+        return usdtSymbol(exchange, symbol) && cryptoSpotBases.has(base) &&
+          (!quote || quote.toUpperCase() === "USDT") && active && !isExplicitTradFiContract(row);
       }).map(row => row.contract_code))];
     } else if (exchange === "XT") {
-      const j = await fetchPublicJson(source);
+      const [j, spotCatalog] = await Promise.all([
+        fetchPublicJson(source),
+        fetchPublicJson("https://sapi.xt.com/v4/public/symbol")
+      ]);
       if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT contract-list schema/status check failed");
-      symbols = [...new Set(j.result.filter(row =>
-        usdtSymbol(exchange, row?.symbol) && row?.tradeSwitch === true && !isExplicitTradFiContract(row) &&
-        String(row?.settleCoin ?? row?.quoteCoin ?? "USDT").toUpperCase() === "USDT"
-      ).map(row => row.symbol))];
+      if (spotCatalog?.rc !== 0 || !Array.isArray(spotCatalog?.result?.symbols)) throw new Error("XT official spot-symbol catalog schema/status check failed");
+      // XT's futures catalog can include TradFi contracts; its spot catalog provides
+      // an official asset-universe cross-check without maintaining a guessed ticker blacklist.
+      const cryptoSpotBases = new Set(spotCatalog.result.symbols
+        .map(row => String(row?.baseCurrency ?? row?.baseCoin ?? String(row?.symbol ?? "").split("_")[0]).trim().toUpperCase())
+        .filter(Boolean));
+      if (!cryptoSpotBases.size) throw new Error("XT official spot catalog has no base assets; refusing an unverified collection universe");
+      symbols = [...new Set(j.result.filter(row => {
+        const symbol = row?.symbol;
+        const base = String(row?.baseCoin ?? String(symbol ?? "").split("_")[0]).trim().toUpperCase();
+        return usdtSymbol(exchange, symbol) && cryptoSpotBases.has(base) &&
+          row?.tradeSwitch === true && !isExplicitTradFiContract(row) &&
+          String(row?.settleCoin ?? row?.quoteCoin ?? "USDT").toUpperCase() === "USDT";
+      }).map(row => row.symbol))];
     }
     if (!symbols.length) throw new Error(exchange + " returned no active USDT contract symbols");
     const totalDiscoveredSymbols = symbols.length;
