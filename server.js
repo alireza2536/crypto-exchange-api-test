@@ -127,8 +127,10 @@ function rowsFrom(value) { return Array.isArray(value) ? value : value ? [value]
 function isExplicitTradFiContract(row) {
   // Prefer exchange-provided asset-class metadata whenever it exists.
   const fields = [
-    row?.assetClass, row?.asset_class, row?.marketType, row?.market_type,
-    row?.businessType, row?.business_type, row?.productType, row?.product_type,
+    row?.assetClass, row?.asset_class, row?.assetType, row?.asset_type,
+    row?.baseAssetType, row?.baseAssetSubType, row?.base_asset_type, row?.base_asset_sub_type,
+    row?.marketType, row?.market_type, row?.businessType, row?.business_type,
+    row?.productType, row?.product_type,
     row?.category, row?.symbolType, row?.symbol_type, row?.instrumentType,
     row?.instrument_type, row?.underlyingType, row?.underlying_type
   ];
