@@ -821,6 +821,15 @@ function summarizeContractCatalog(exchange,j) {
   }).filter(Boolean);
   const classificationSummary=Object.fromEntries(Object.entries(classificationValues)
     .map(([key,values])=>[key,{distinctValues:values.size,sample:[...values].slice(0,12)}]));
+  const symbolGroupStats={};
+  for(const row of (Array.isArray(raw)?raw:[])){
+    const group=row?.symbolGroupId;
+    if(group===null||group===undefined||String(group).trim()==="") continue;
+    const key=String(group);
+    if(!symbolGroupStats[key]) symbolGroupStats[key]={count:0,samples:[]};
+    symbolGroupStats[key].count++;
+    if(symbolGroupStats[key].samples.length<4) symbolGroupStats[key].samples.push(String(row?.symbol??row?.contract_code??""));
+  }
   const symbols=normalized.map(x=>String(x.symbol||"").trim().toUpperCase()).filter(Boolean);
   const unique=new Set(symbols);
   const active=normalized.filter(x=>x.active===true).length;
@@ -831,7 +840,7 @@ function summarizeContractCatalog(exchange,j) {
   const inactive=normalized.filter(x=>x.active===false).length;
   const unknownStatus=normalized.filter(x=>x.active===null).length;
   const btcAliases=exchange==="MEXC"?["BTC_USDT"]:exchange==="BingX"?["BTC-USDT"]:exchange==="OKX"?["BTC-USDT-SWAP"]:exchange==="WEEX"?["BTCUSDT"]:exchange==="HTX"?["BTC-USDT"]:exchange==="KuCoin"?["XBTUSDTM","BTCUSDTM"]:["BTC_USDT"];
-  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),classificationSummary,sample:normalized.slice(0,5)};
+  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),classificationSummary,symbolGroupStats,sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
   {exchange:"MEXC",kind:"contract_list",url:"https://api.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
@@ -921,7 +930,7 @@ async function runDeepProbe(probe) {
     }
     return {exchange:probe.exchange,kind:probe.kind,symbol:probe.symbol??null,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,contractClassification:probe.kind==="contract_detail_probe"&&json?.result?Object.fromEntries(["assetClass","marketType","business_type","businessType","productType","underlyingType","type","category","symbolType","contractType","symbolGroupId","plateId","plateIds","plate","plates","plateName","plateNames","baseCoinName","baseCoin","baseCurrency","enName","enDesc","cnName","cnDesc","displayName","state"].filter(key=>json.result[key]!==null&&json.result[key]!==undefined).map(key=>[key,json.result[key]])):null,
     spotCatalogSummary:probe.kind==="spot_catalog_probe"?(()=>{const rows=probe.exchange==="HTX"?(json?.data||[]):(json?.result?.symbols||[]);const bases=new Set(rows.map(row=>String(probe.exchange==="HTX"?(row?.["base-currency"]??""):(row?.symbol??"").split("_")[0]).toUpperCase()).filter(Boolean));const examples=["BTC","ETH","AAPL","AMD","NVDA","NVDAX","JP225","JP225USD","XAU","XAUT","SILVER","SPX","USOIL","META"];const exampleRows=rows.filter(row=>examples.includes(String(probe.exchange==="HTX"?(row?.["base-currency"]??""):(row?.baseCurrency??String(row?.symbol??"").split("_")[0])).toUpperCase())).slice(0,25).map(row=>Object.fromEntries(["symbol","base-currency","baseCurrency","displayName","type","state","symbol-partition","baseCoin","quoteCurrency","quote-currency","productType","marketType","assetClass"].filter(key=>row[key]!==null&&row[key]!==undefined).map(key=>[key,row[key]])));const categoryCounts={};for(const row of rows){for(const key of ["type","state","symbol-partition"]){if(row[key]!==null&&row[key]!==undefined){const bucket=key+":"+String(row[key]);categoryCounts[bucket]=(categoryCounts[bucket]||0)+1;}}}return {count:rows.length,firstFields:Object.keys(rows[0]||{}).slice(0,20),categoryCounts,exampleBaseMembership:Object.fromEntries(examples.map(base=>[base,bases.has(base)])),exampleRows}})():null,
-    groupCatalogSummary:probe.kind==="group_catalog_probe"?(()=>{const result=json?.result;const rows=Array.isArray(result)?result:Array.isArray(result?.list)?result.list:Array.isArray(result?.data)?result.data:Array.isArray(json?.data)?json.data:[];const fields=row=>Object.fromEntries(Object.entries(row||{}).filter(([key,value])=>value!==null&&value!==undefined&&/(id|name|desc|type|category|group|plate|code|symbol)/i.test(key)).slice(0,16));return {resultType:Array.isArray(result)?"array":typeof result,keys:result&&typeof result==="object"?Object.keys(result).slice(0,20):[],count:rows.length,sample:rows.slice(0,25).map(fields),preview:JSON.stringify(result).slice(0,1200)}})():null,
+    groupCatalogSummary:probe.kind==="group_catalog_probe"?(()=>{const result=json?.result;const rows=Array.isArray(result)?result:Array.isArray(result?.list)?result.list:Array.isArray(result?.data)?result.data:Array.isArray(json?.data)?json.data:[];const fields=row=>Object.fromEntries(Object.entries(row||{}).filter(([key,value])=>value!==null&&value!==undefined&&/(id|name|desc|type|category|group|plate|code|symbol)/i.test(key)).slice(0,16));return {resultType:Array.isArray(result)?"array":typeof result,keys:result&&typeof result==="object"?Object.keys(result).slice(0,20):[],count:rows.length,sample:rows.slice(0,40).map(fields),preview:JSON.stringify(result).slice(0,2400)}})():null,
     synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,symbol:probe.symbol??null,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   }
@@ -1400,7 +1409,7 @@ server.listen(PORT, "0.0.0.0", () => {
           rawCount: item.contractStats.rawCount, normalizedCount: item.contractStats.normalizedCount,
           uniqueSymbolCount: item.contractStats.uniqueSymbolCount, activeCount: item.contractStats.activeCount,
           usdtSettledCount: item.contractStats.usdtSettledCount, activeUsdtSettledCount: item.contractStats.activeUsdtSettledCount,
-          classificationSummary: item.contractStats.classificationSummary
+          classificationSummary: item.contractStats.classificationSummary, symbolGroupStats: item.exchange === "XT" ? item.contractStats.symbolGroupStats : null
         } : null,
         contractClassification: item.contractClassification || null,
         groupCatalogSummary: item.groupCatalogSummary || null,
