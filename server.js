@@ -184,7 +184,8 @@ async function collectExchangeOi(exchange, options = {}) {
     }
     const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
     for (const contract of contracts.data) {
-      const typeLabel = Number(contract?.typeLabel ?? 0); // Official MEXC metadata: 0 normal, 1 TradFi, 2 stock.\n      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0) continue;
+      const typeLabel = Number(contract?.typeLabel ?? 0); // Only official normal/crypto label 0 is accepted; all nonzero labels are excluded conservatively.
+      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0) continue;
       const ticker = tickerBySymbol.get(contract.symbol);
       const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
       if (snap) snapshots.push(snap);
