@@ -283,15 +283,47 @@ async function collectExchangeOi(exchange, options = {}) {
         return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active && !isExplicitTradFiContract(row);
       }).map(row => row.contract_code))];
     } else if (exchange === "XT") {
-      const j = await fetchPublicJson(source);
+      const [j, plateCatalog] = await Promise.all([
+        fetchPublicJson(source),
+        fetchPublicJson("https://fapi.xt.com/future/market/v1/public/plate/list")
+      ]);
       if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT contract-list schema/status check failed");
-      // Use only classification supplied by XT's own futures contract metadata.
-      // Do not hard-whitelist spot-listed bases, because TradFi trackers can also be spot-listed tokens
-      // and some valid crypto perpetuals may not have a current spot market.
-      symbols = [...new Set(j.result.filter(row =>
-        usdtSymbol(exchange, row?.symbol) && row?.tradeSwitch === true && !isExplicitTradFiContract(row) &&
+      if (plateCatalog?.returnCode !== 0 || !Array.isArray(plateCatalog?.result)) throw new Error("XT official plate catalog schema/status check failed");
+      // XT contract rows include an official `plates` array. Derive the TradFi category IDs
+      // dynamically from the official plate catalog rather than maintaining a guessed ticker list.
+      const tradfiPlates = plateCatalog.result.filter(row =>
+        /^(tradfi|forex|tokenized stocks|commodities|index|indices)$/i.test(String(row?.plate ?? row?.name ?? "").trim())
+      ).map(row => ({ id: Number(row?.id), name: String(row?.plate ?? row?.name ?? "").trim() }))
+        .filter(row => Number.isFinite(row.id));
+      const tradfiPlateIds = new Set(tradfiPlates.map(row => row.id));
+      if (!tradfiPlateIds.size) throw new Error("XT official plate catalog has no recognized TradFi categories; refusing unclassified collection");
+      const usdtRows = j.result.filter(row =>
+        usdtSymbol(exchange, row?.symbol) && row?.tradeSwitch === true &&
         String(row?.settleCoin ?? row?.quoteCoin ?? "USDT").toUpperCase() === "USDT"
+      );
+      const missingPlateMetadata = usdtRows.filter(row => !Array.isArray(row?.plates)).length;
+      const excludedByOfficialPlate = usdtRows.filter(row =>
+        Array.isArray(row?.plates) && row.plates.some(id => tradfiPlateIds.has(Number(id)))
+      ).length;
+      const excludedByMetadataOnly = usdtRows.filter(row =>
+        (!Array.isArray(row?.plates) || !row.plates.some(id => tradfiPlateIds.has(Number(id)))) && isExplicitTradFiContract(row)
+      ).length;
+      // Rows without the official plate assignment are skipped rather than silently assumed crypto.
+      symbols = [...new Set(usdtRows.filter(row =>
+        Array.isArray(row?.plates) &&
+        !row.plates.some(id => tradfiPlateIds.has(Number(id))) &&
+        !isExplicitTradFiContract(row)
       ).map(row => row.symbol))];
+      console.log(JSON.stringify({
+        event: "xt_contract_classification",
+        totalContractRows: j.result.length,
+        activeUsdtCandidates: usdtRows.length,
+        tradfiPlates,
+        excludedByOfficialPlate,
+        excludedByMetadataOnly,
+        missingPlateMetadata,
+        discoveredCryptoSymbols: symbols.length
+      }));
     }
     if (!symbols.length) throw new Error(exchange + " returned no active USDT contract symbols");
     const totalDiscoveredSymbols = symbols.length;
