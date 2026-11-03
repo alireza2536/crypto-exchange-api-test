@@ -990,7 +990,7 @@ async function runHtxFrontendCatalogAudit() {
     }
   }));
   let bundleAudit = null;
-  const indexBundle = results.find(row => row.status === 200)?.scripts?.find(url => /\\/index\\.[^/]+\\.js(?:\\?|$)/i.test(url));
+  const indexBundle = results.find(row => row.status === 200)?.scripts?.find(url => /\/index\.[^/]+\.js(?:\?|$)/i.test(url));
   if (indexBundle) {
     try {
       const response = await fetch(indexBundle, {
@@ -998,13 +998,13 @@ async function runHtxFrontendCatalogAudit() {
         signal: AbortSignal.timeout(10000)
       });
       const js = await response.text();
-      const pathCandidates = [...new Set([...js.matchAll(/["'`]((?:https?:)?\\/[^"'`\\s]{1,220})["'`]/g)]
+      const pathCandidates = [...new Set([...js.matchAll(/["'`]((?:https?:)?\/[^"'`\s]{1,220})["'`]/g)]
         .map(match => match[1])
         .filter(value => /api|contract|market|symbol|tradfi|stock|asset|instrument|futures|future|list/i.test(value)))]
         .slice(0, 45);
       const termSnippets = [...js.matchAll(/.{0,90}(?:tradfi|businessType|assetClass|stock|marketType|symbolList|contractInfo|tradFi|assetType).{0,150}/gi)]
         .slice(0, 15)
-        .map(match => match[0].replace(/\\s+/g, " ").slice(0, 240));
+        .map(match => match[0].replace(/\s+/g, " ").slice(0, 240));
       bundleAudit = { url: indexBundle, status: response.status, contentType: response.headers.get("content-type"), bodyLength: js.length, pathCandidates, termSnippets };
     } catch (error) {
       bundleAudit = { url: indexBundle, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout while reading HTX frontend bundle" : String(error.message || error) };
