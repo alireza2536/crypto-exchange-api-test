@@ -1023,6 +1023,31 @@ async function runHtxFrontendCatalogAudit() {
       bundleAudit = { url: indexBundle, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout while reading HTX frontend bundle" : String(error.message || error) };
     }
   }
+  const htxScripts = results.find(row => row.status === 200)?.scripts ?? [];
+  const auxiliaryScripts = [
+    htxScripts.find(url => /\/web-v4\/entry\/v4\.js(?:\?|$)/i.test(url)),
+    htxScripts.find(url => /\/vendor\.[^/]+\.js(?:\?|$)/i.test(url))
+  ].filter(Boolean);
+  const auxiliaryBundleAudit = await Promise.all(auxiliaryScripts.map(async url => {
+    try {
+      const response = await fetch(url, {
+        headers: { accept: "application/javascript,*/*" },
+        signal: AbortSignal.timeout(8000)
+      });
+      const js = await response.text();
+      const terms = ["linear_swap_contract_info", "hb/api", "x/v1/linear_swap_contract_info", "linear-swap-api", "requestGet", "baseURL", "apiBase", "requestGetPro"];
+      const termSnippets = terms.map(term => {
+        const idx = js.toLowerCase().indexOf(term.toLowerCase());
+        return idx < 0 ? { term, found: false } : {
+          term, found: true, index: idx,
+          context: js.slice(Math.max(0, idx - 180), Math.min(js.length, idx + 320)).replace(/\s+/g, " ")
+        };
+      });
+      return { url, status: response.status, contentType: response.headers.get("content-type"), bodyLength: js.length, termSnippets };
+    } catch (error) {
+      return { url, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout after 8000 ms" : String(error.message || error) };
+    }
+  }));
   const htxCatalogProbes = await Promise.all([
     { label: "hb_api_all", url: "https://www.htx.com/hb/api/x/v1/linear_swap_contract_info?business_type=all&trade_partition=ALL" },
     { label: "hb_api_crypto", url: "https://www.htx.com/hb/api/x/v1/linear_swap_contract_info?business_type=all&trade_partition=CRYPTO" },
@@ -1054,9 +1079,9 @@ async function runHtxFrontendCatalogAudit() {
       return { label: probe.label, url: probe.url, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout after 7000 ms" : String(error.message || error) };
     }
   }));
-  console.log(JSON.stringify({ event: "htx_frontend_catalog_audit", results, bundleAudit }));
+  console.log(JSON.stringify({ event: "htx_frontend_catalog_audit", results, bundleAudit, auxiliaryBundleAudit }));
   console.log(JSON.stringify({ event: "htx_official_partition_probe", probes: htxCatalogProbes }));
-  return { results, bundleAudit, htxCatalogProbes };
+  return { results, bundleAudit, auxiliaryBundleAudit, htxCatalogProbes };
 }
 
 async function runWeexCatalogAudit(){
