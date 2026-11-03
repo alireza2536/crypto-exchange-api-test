@@ -866,7 +866,11 @@ const oiHistoryProbes=[
   {exchange:"HTX",kind:"open_interest_history_1h",timeframe:"1h",url:"https://api.hbdm.com/linear-swap-api/v1/swap_his_open_interest?contract_code=BTC-USDT&period=60min&amount_type=1&size=3",check:j=>j?.status==="ok"&&Array.isArray(j?.data?.tick)&&j.data.tick.length>0&&Number(j.data.tick[0]?.volume)>0},
   {exchange:"KuCoin",kind:"open_interest_history_15m",timeframe:"15m",url:"https://api.kucoin.com/api/ua/v2/market/open-interest?symbol=XBTUSDTM&interval=15min&pageSize=3",check:j=>String(j?.code)==="200000"&&Array.isArray(j?.data)&&j.data.length>0&&Number(j.data[0]?.openInterest)>0}
 ];
-const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...xtSymbolDetailProbes,...symbolCoverageProbes,...oiHistoryProbes];
+const spotCatalogProbes=[
+  {exchange:"HTX",kind:"spot_catalog_probe",symbol:"HTX_SPOT_BASES",url:"https://api.huobi.pro/v1/common/symbols",check:j=>j?.status==="ok"&&Array.isArray(j.data)},
+  {exchange:"XT",kind:"spot_catalog_probe",symbol:"XT_SPOT_BASES",url:"https://sapi.xt.com/v4/public/symbol",check:j=>(j?.code===0||j?.code==="0"||j?.returnCode===0)&&Array.isArray(j?.result)}
+];
+const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...xtSymbolDetailProbes,...spotCatalogProbes,...symbolCoverageProbes,...oiHistoryProbes];
 async function runDeepProbe(probe) {
   const started=Date.now();let response=null,raw="",json=null,retryCount=0;
   try {
