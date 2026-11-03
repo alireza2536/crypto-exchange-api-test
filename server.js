@@ -74,9 +74,11 @@ async function initOiSnapshotDb() {
         cursor_index INTEGER NOT NULL DEFAULT 0,
         last_bulk_collection_at TIMESTAMPTZ,
         last_collection_at TIMESTAMPTZ,
-        last_discovered_count INTEGER NOT NULL DEFAULT 0
+        last_discovered_count INTEGER NOT NULL DEFAULT 0,
+        retry_symbols TEXT[] NOT NULL DEFAULT '{}'
       )
     `);
+    await oiSnapshotPool.query("ALTER TABLE oi_collection_state ADD COLUMN IF NOT EXISTS retry_symbols TEXT[] NOT NULL DEFAULT '{}'");
     await oiSnapshotPool.query(`
       INSERT INTO oi_collection_state (exchange)
       VALUES ('MEXC'), ('BingX'), ('OKX'), ('WEEX'), ('HTX'), ('KuCoin'), ('XT')
@@ -226,10 +228,15 @@ async function collectExchangeOi(exchange, options = {}) {
     const totalDiscoveredSymbols = symbols.length;
     const cursorIndex = Math.max(0, Number(options.cursorIndex) || 0) % totalDiscoveredSymbols;
     const batchLimit = Math.max(1, Number(options.batchLimit) || OI_ROTATING_BATCH_SIZE);
-    const batchSymbols = Array.from(
-      { length: Math.min(batchLimit, totalDiscoveredSymbols) },
-      (_, i) => symbols[(cursorIndex + i) % totalDiscoveredSymbols]
-    );
+    const retrySymbols = [...new Set((Array.isArray(options.retrySymbols) ? options.retrySymbols : [])
+      .filter(symbol => symbols.includes(symbol)))].slice(0, batchLimit);
+    const freshSlots = Math.max(0, batchLimit - retrySymbols.length);
+    const freshSymbols = [];
+    for (let i = 0; i < totalDiscoveredSymbols && freshSymbols.length < freshSlots; i++) {
+      const candidate = symbols[(cursorIndex + i) % totalDiscoveredSymbols];
+      if (!retrySymbols.includes(candidate)) freshSymbols.push(candidate);
+    }
+    const batchSymbols = [...retrySymbols, ...freshSymbols];
     // BingX's public OI endpoint is rate-limited; serialize requests to avoid bursts.
     const concurrency = exchange === "BingX" ? 1 : exchange === "WEEX" ? 4 : 8;
     let lastBingXRequestAt = 0;
@@ -261,19 +268,26 @@ async function collectExchangeOi(exchange, options = {}) {
         if (j?.returnCode !== 0) throw new Error("XT returnCode " + j?.returnCode);
         value = j?.result?.openInterest ?? j?.result?.openInterestUsd;
       }
-      return toSnapshot(exchange, symbol, value, endpoint);
+      const snapshot = toSnapshot(exchange, symbol, value, endpoint);
+      if (!snapshot) throw new Error("Missing or non-positive Open Interest value");
+      return snapshot;
     });
     for (const result of results) {
       if (result?._error) continue;
       if (result) snapshots.push(result);
     }
-    snapshots.partialFailures = results.filter(result => result?._error).length;
+    const failedResults = results.map((result, index) => result?._error
+      ? { symbol: batchSymbols[index], error: result._error }
+      : null).filter(Boolean);
+    snapshots.partialFailures = failedResults.length;
+    snapshots.partialFailureDetails = failedResults;
+    snapshots.nextRetrySymbols = failedResults.map(item => item.symbol);
     snapshots.discoveredSymbols = totalDiscoveredSymbols;
     snapshots.batchSize = batchSymbols.length;
-    snapshots.nextCursorIndex = (cursorIndex + batchSymbols.length) % totalDiscoveredSymbols;
-    if (!snapshots.length) throw new Error("No valid Open Interest values returned for selected USDT contract batch");
+    snapshots.nextCursorIndex = (cursorIndex + freshSymbols.length) % totalDiscoveredSymbols;
+    if (!snapshots.length && !snapshots.partialFailures) throw new Error("No valid Open Interest values returned for selected USDT contract batch");
   }
-  if (!snapshots.length) throw new Error("No active USDT contract Open Interest values parsed");
+  if (!snapshots.length && !snapshots.partialFailures) throw new Error("No active USDT contract Open Interest values parsed");
   return snapshots;
 }
 
@@ -286,7 +300,7 @@ async function collectOpenInterestSnapshots() {
   try {
     const exchanges = ["MEXC", "BingX", "OKX", "WEEX", "HTX", "KuCoin", "XT"];
     const stateResult = await oiSnapshotPool.query(
-      "SELECT exchange, cursor_index, last_bulk_collection_at FROM oi_collection_state WHERE exchange = ANY($1::text[])",
+      "SELECT exchange, cursor_index, last_bulk_collection_at, retry_symbols FROM oi_collection_state WHERE exchange = ANY($1::text[])",
       [exchanges]
     );
     const stateByExchange = new Map(stateResult.rows.map(row => [row.exchange, row]));
@@ -301,6 +315,7 @@ async function collectOpenInterestSnapshots() {
       try {
         const snapshots = await collectExchangeOi(exchange, {
           cursorIndex: state.cursor_index,
+          retrySymbols: state.retry_symbols || [],
           batchLimit: isBulk ? Number.MAX_SAFE_INTEGER : OI_ROTATING_BATCH_SIZE
         });
         let saved = 0;
@@ -329,6 +344,10 @@ async function collectOpenInterestSnapshots() {
             "UPDATE oi_collection_state SET cursor_index = $2, last_collection_at = NOW(), last_discovered_count = $3 WHERE exchange = $1",
             [exchange, snapshots.nextCursorIndex ?? state.cursor_index, snapshots.discoveredSymbols ?? snapshots.length]
           );
+          await oiSnapshotPool.query(
+            "UPDATE oi_collection_state SET retry_symbols = $2::text[] WHERE exchange = $1",
+            [exchange, snapshots.nextRetrySymbols || []]
+          );
         }
         return {
           exchange,
@@ -338,7 +357,9 @@ async function collectOpenInterestSnapshots() {
           saved,
           partialFailures,
           nextCursorIndex: snapshots.nextCursorIndex ?? null,
-          ...(partialFailures ? { error: partialFailures + " symbol requests failed; successful symbols were still saved" } : {})
+          retrySymbols: snapshots.nextRetrySymbols || [],
+          failureDetails: snapshots.partialFailureDetails || [],
+          ...(partialFailures ? { error: partialFailures + " symbol requests failed; failed symbols queued for retry" } : {})
         };
       } catch (error) {
         return { exchange, status: "FAIL", error: String(error.message || error) };
@@ -348,7 +369,8 @@ async function collectOpenInterestSnapshots() {
     oiSnapshotLastFailures = outcomes.filter(item => !["SAVED", "SKIPPED"].includes(item.status)).map(item => ({
       exchange: item.exchange, error: item.error || "Partial collection", status: item.status,
       discovered: item.discovered || 0, batchSize: item.batchSize || 0,
-      saved: item.saved || 0, partialFailures: item.partialFailures || 0
+      saved: item.saved || 0, partialFailures: item.partialFailures || 0,
+      failureDetails: item.failureDetails || [], retrySymbols: item.retrySymbols || []
     }));
     console.log(JSON.stringify({
       event: "open_interest_snapshot_collection",
