@@ -962,6 +962,34 @@ async function runDeepProbe(probe) {
     synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,symbol:probe.symbol??null,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   }
+async function runHtxFrontendCatalogAudit() {
+  const urls = [
+    "https://www.htx.com/en-us/futures/",
+    "https://www.htx.com/en-us/futures/tradfi"
+  ];
+  const results = await Promise.all(urls.map(async url => {
+    try {
+      const response = await fetch(url, {
+        headers: { accept: "text/html,application/xhtml+xml" },
+        signal: AbortSignal.timeout(7000)
+      });
+      const html = await response.text();
+      const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)]
+        .map(match => { try { return new URL(match[1], url).toString(); } catch { return match[1]; } })
+        .slice(0, 20);
+      const markers = [...html.matchAll(/.{0,100}(?:tradfi|assetClass|businessType|contractInfo|market\\/list|symbol\\/list|stocks|commodities|__NEXT_DATA__|__INITIAL_STATE__).{0,160}/gi)]
+        .slice(0, 12)
+        .map(match => match[0].replace(/\\s+/g, " ").slice(0, 260));
+      const title = html.match(/<title[^>]*>(.*?)<\\/title>/i)?.[1]?.replace(/\\s+/g, " ").slice(0, 180) ?? null;
+      return { url, status: response.status, finalUrl: response.url, contentType: response.headers.get("content-type"), bodyLength: html.length, title, scripts, markers };
+    } catch (error) {
+      return { url, status: null, error: error.name === "AbortError" ? "timeout after 7000 ms" : String(error.message || error) };
+    }
+  }));
+  console.log(JSON.stringify({ event: "htx_frontend_catalog_audit", results }));
+  return results;
+}
+
 async function runWeexCatalogAudit(){
   const urls=[
     "https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",
@@ -1474,6 +1502,7 @@ server.listen(PORT, "0.0.0.0", () => {
     const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
     const historyBody = await historyResponse.json();
     console.log(JSON.stringify({ event: "startup_history_depth_probe", httpStatus: historyResponse.status, ...historyBody }));
+    await runHtxFrontendCatalogAudit();
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
   });
