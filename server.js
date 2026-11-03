@@ -764,7 +764,7 @@ const xtSymbolDetailProbes=[
   {exchange:"XT",kind:"contract_detail_probe",symbol:"XAU_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=xau_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"SILVER_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=silver_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"SPX_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=spx_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
-  {exchange:"XT",kind:"contract_detail_probe",symbol:"META_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=meta_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"NVDL_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=nvdl_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"SOL_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=sol_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"XRP_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=xrp_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"DOGE_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=doge_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
@@ -802,7 +802,7 @@ function summarizeContractCatalog(exchange,j) {
   const classificationKeys = [
     "assetClass", "asset_class", "assetType", "asset_type", "baseAssetType", "baseAssetSubType",
     "marketType", "market_type", "businessType", "business_type", "productType", "product_type",
-    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel"
+    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel", "instCategory", "symbolGroupId"
   ];
   const classificationValues = {};
   const normalized=(Array.isArray(raw)?raw:[]).map(x=>{
@@ -1381,6 +1381,30 @@ server.listen(PORT, "0.0.0.0", () => {
     await runDataSweep();
     const deep = await runDeepSweep();
     console.log(JSON.stringify({ event: "startup_deep_market_probe", ...deep }));
+    const compactFailures = deep.results.filter(x => x.status !== "PASS" && x.status !== "NOT_LISTED")
+      .map(x => ({ exchange: x.exchange, kind: x.kind, symbol: x.symbol ?? null, status: x.status, httpStatus: x.httpStatus ?? null, error: x.error ?? null }));
+    const xtDetails = deep.results.filter(x => x.exchange === "XT" && x.kind === "contract_detail_probe");
+    const xtCatalog = deep.results.find(x => x.exchange === "XT" && x.kind === "contract_list");
+    console.log(JSON.stringify({
+      event: "startup_catalog_audit_summary",
+      passed: deep.passed, total: deep.total, failed: deep.failed,
+      failures: compactFailures,
+      xtDetailProbes: xtDetails.map(x => ({
+        symbol: x.symbol, status: x.status, httpStatus: x.httpStatus,
+        classification: x.contractClassification ? {
+          symbolGroupId: x.contractClassification.symbolGroupId,
+          baseCoin: x.contractClassification.baseCoin,
+          enName: x.contractClassification.enName,
+          enDesc: x.contractClassification.enDesc,
+          cnName: x.contractClassification.cnName,
+          cnDesc: x.contractClassification.cnDesc,
+          productType: x.contractClassification.productType,
+          underlyingType: x.contractClassification.underlyingType
+        } : null,
+        error: x.error ?? null
+      })),
+      xtGroupIdSummary: xtCatalog?.contractStats?.classificationSummary?.symbolGroupId ?? null
+    }));
     const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
     const historyBody = await historyResponse.json();
     console.log(JSON.stringify({ event: "startup_history_depth_probe", httpStatus: historyResponse.status, ...historyBody }));
