@@ -802,7 +802,7 @@ function summarizeContractCatalog(exchange,j) {
   const classificationKeys = [
     "assetClass", "asset_class", "assetType", "asset_type", "baseAssetType", "baseAssetSubType",
     "marketType", "market_type", "businessType", "business_type", "productType", "product_type",
-    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel", "symbolGroupId"
+    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel"
   ];
   const classificationValues = {};
   const normalized=(Array.isArray(raw)?raw:[]).map(x=>{
@@ -821,23 +821,6 @@ function summarizeContractCatalog(exchange,j) {
   }).filter(Boolean);
   const classificationSummary=Object.fromEntries(Object.entries(classificationValues)
     .map(([key,values])=>[key,{distinctValues:values.size,sample:[...values].slice(0,12)}]));
-  const classificationExamples={};
-  const assetMetadataExamples=[];
-  for(const row of (Array.isArray(raw)?raw:[])){
-    const symbol=String(row?.symbol??row?.contract_code??"").toUpperCase();
-    if(/(AAPL|AMD|NVDA|NVDAX|JP225|XAU|XAUT|SILVER|SPX|USOIL|BRENTOIL|META|BTC|ETH)/.test(symbol)){
-      const keys=["symbol","contract_code","typeLabel","baseCoinName","baseCoin","enName","enDesc","business_type","category","symbolGroupId","settleCoin"];
-      assetMetadataExamples.push(Object.fromEntries(keys.filter(key=>row[key]!==null&&row[key]!==undefined).map(key=>[key,row[key]])));
-      if(assetMetadataExamples.length>=12) break;
-    }
-  }
-  for(const item of normalized){
-    for(const [key,value] of Object.entries(item.classification||{})){
-      const bucket=key+":"+value;
-      if(!classificationExamples[bucket]) classificationExamples[bucket]=[];
-      if(classificationExamples[bucket].length<8) classificationExamples[bucket].push(item.symbol);
-    }
-  }
   const symbols=normalized.map(x=>String(x.symbol||"").trim().toUpperCase()).filter(Boolean);
   const unique=new Set(symbols);
   const active=normalized.filter(x=>x.active===true).length;
@@ -848,7 +831,7 @@ function summarizeContractCatalog(exchange,j) {
   const inactive=normalized.filter(x=>x.active===false).length;
   const unknownStatus=normalized.filter(x=>x.active===null).length;
   const btcAliases=exchange==="MEXC"?["BTC_USDT"]:exchange==="BingX"?["BTC-USDT"]:exchange==="OKX"?["BTC-USDT-SWAP"]:exchange==="WEEX"?["BTCUSDT"]:exchange==="HTX"?["BTC-USDT"]:exchange==="KuCoin"?["XBTUSDTM","BTCUSDTM"]:["BTC_USDT"];
-  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),classificationSummary,classificationExamples,assetMetadataExamples,sample:normalized.slice(0,5)};
+  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),classificationSummary,sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
   {exchange:"MEXC",kind:"contract_list",url:"https://api.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
