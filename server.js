@@ -124,6 +124,27 @@ function positiveOi(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 function rowsFrom(value) { return Array.isArray(value) ? value : value ? [value] : []; }
+function isExplicitTradFiContract(row) {
+  // Prefer exchange-provided asset-class metadata whenever it exists.
+  const fields = [
+    row?.assetClass, row?.asset_class, row?.marketType, row?.market_type,
+    row?.businessType, row?.business_type, row?.productType, row?.product_type,
+    row?.category, row?.symbolType, row?.symbol_type, row?.instrumentType,
+    row?.instrument_type, row?.underlyingType, row?.underlying_type
+  ];
+  const normalized = fields
+    .filter(value => value !== null && value !== undefined && String(value).trim() !== "")
+    .map(value => String(value).trim().toLowerCase().replace(/[\\s_-]+/g, ""));
+  return normalized.some(value =>
+    /^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(value)
+  );
+}
+function isBingXTradFiSymbol(symbol) {
+  // BingX's public USDT-M catalog includes tagged TradFi instrument families:
+  // NCS* (equities/indices), NCCO* (commodities), and NCF* (FX).
+  const base = String(symbol ?? "").split("-")[0].toUpperCase();
+  return /^(NCS|NCCO|NCF)/.test(base);
+}
 function usdtSymbol(exchange, symbol) {
   if (typeof symbol !== "string") return false;
   if (exchange === "MEXC") return symbol.endsWith("_USDT");
@@ -211,7 +232,7 @@ async function collectExchangeOi(exchange, options = {}) {
       const j = await fetchPublicJson(source);
       if (!(j?.code === 0 || j?.code === "0") || !Array.isArray(j.data)) throw new Error("BingX contract-list schema/status check failed");
       symbols = [...new Set(j.data.filter(row => {
-        if (!usdtSymbol(exchange, row?.symbol)) return false;
+        if (!usdtSymbol(exchange, row?.symbol) || isExplicitTradFiContract(row) || isBingXTradFiSymbol(row?.symbol)) return false;
         const status = String(row?.status ?? "").toUpperCase();
         return !status || ["TRADING", "ACTIVE", "ONLINE", "1"].includes(status);
       }).map(row => row.symbol))];
@@ -246,13 +267,13 @@ async function collectExchangeOi(exchange, options = {}) {
         const symbol = row?.contract_code;
         const quote = String(row?.settle_currency ?? row?.quote_currency ?? "");
         const active = Number(row?.contract_status) === 1;
-        return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active;
+        return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active && !isExplicitTradFiContract(row);
       }).map(row => row.contract_code))];
     } else if (exchange === "XT") {
       const j = await fetchPublicJson(source);
       if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT contract-list schema/status check failed");
       symbols = [...new Set(j.result.filter(row =>
-        usdtSymbol(exchange, row?.symbol) && row?.tradeSwitch === true &&
+        usdtSymbol(exchange, row?.symbol) && row?.tradeSwitch === true && !isExplicitTradFiContract(row) &&
         String(row?.settleCoin ?? row?.quoteCoin ?? "USDT").toUpperCase() === "USDT"
       ).map(row => row.symbol))];
     }
