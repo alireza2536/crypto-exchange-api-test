@@ -1003,7 +1003,7 @@ async function runHtxFrontendCatalogAudit() {
         /(api\/|\/api|contract\/|market\/|symbol\/|tradfi|swap_contract|contract_info|linear-swap|businessType|business_type|assetClass|assetType|stock|forex)/i.test(value)
       ).slice(0, 100);
       const apiHosts = [...new Set([...js.matchAll(/https?:\/\/[^"'\x60\s]{1,180}/g)].map(match => match[0]))].slice(0, 20);
-      const targetedTerms = ["tradfi", "TradFi", "TRADFI", "assetClass", "assetType", "businessType", "business_type", "symbolGroupId", "contract_code", "contract_type", "stock", "commodity", "forex"];
+      const targetedTerms = ["tradfi", "TradFi", "TRADFI", "assetClass", "assetType", "businessType", "business_type", "trade_partition", "linear_swap_contract_info", "swap_contract_info", "requestGetPro", "requestGet", "contract_code", "contract_type", "stock", "commodity", "forex"];
       const termSnippets = targetedTerms.map(term => {
         const idx = js.toLowerCase().indexOf(term.toLowerCase());
         return idx < 0 ? { term, found: false } : {
@@ -1011,7 +1011,14 @@ async function runHtxFrontendCatalogAudit() {
           context: js.slice(Math.max(0, idx - 180), Math.min(js.length, idx + 320)).replace(/\s+/g, " ")
         };
       });
-      bundleAudit = { url: indexBundle, status: response.status, contentType: response.headers.get("content-type"), bodyLength: js.length, apiStringCandidates, apiHosts, termSnippets };
+      const contextTerms = ["trade_partition", "linear_swap_contract_info", "swap_contract_info"];
+      const contextMatches = contextTerms.map(term => ({
+        term,
+        contexts: [...js.matchAll(new RegExp(term, "gi"))].slice(0, 8).map(match =>
+          js.slice(Math.max(0, match.index - 220), Math.min(js.length, match.index + 360)).replace(/\\s+/g, " ")
+        )
+      }));
+      bundleAudit = { url: indexBundle, status: response.status, contentType: response.headers.get("content-type"), bodyLength: js.length, apiStringCandidates, apiHosts, termSnippets, contextMatches };
     } catch (error) {
       bundleAudit = { url: indexBundle, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout while reading HTX frontend bundle" : String(error.message || error) };
     }
