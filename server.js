@@ -1026,7 +1026,8 @@ async function runHtxFrontendCatalogAudit() {
   const htxScripts = results.find(row => row.status === 200)?.scripts ?? [];
   const auxiliaryScripts = [
     htxScripts.find(url => /\/web-v4\/entry\/v4\.js(?:\?|$)/i.test(url)),
-    htxScripts.find(url => /\/vendor\.[^/]+\.js(?:\?|$)/i.test(url))
+    htxScripts.find(url => /\/vendor\.[^/]+\.js(?:\?|$)/i.test(url)),
+    htxScripts.find(url => /\/main\.[^/]+\.js(?:\?|$)/i.test(url))
   ].filter(Boolean);
   const auxiliaryBundleAudit = await Promise.all(auxiliaryScripts.map(async url => {
     try {
@@ -1459,8 +1460,10 @@ const server = http.createServer(async (req, res) => {
               response=await fetch(spec.url(cursor),{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
               lastHttpStatus=response.status; lastRaw=await response.text();
               let retryJson; try{retryJson=JSON.parse(lastRaw)}catch{retryJson=null}
-              if(attempt<2 && response.ok && spec.exchange==="BingX" && [100410,100429].includes(Number(retryJson?.code))){
-                await new Promise(resolve=>setTimeout(resolve,2000*(attempt+1)));
+              const transientHttp = response.status === 429 || response.status >= 500;
+              const transientApi = response.ok && spec.exchange === "BingX" && [100410,100429].includes(Number(retryJson?.code));
+              if(attempt < 2 && (transientHttp || transientApi)){
+                await new Promise(resolve=>setTimeout(resolve,1500*(attempt+1)));
                 continue;
               }
               break;
