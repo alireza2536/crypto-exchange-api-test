@@ -211,13 +211,21 @@ async function collectExchangeOi(exchange, options = {}) {
         return !status || ["TRADING", "ACTIVE", "ONLINE", "1"].includes(status);
       }).map(row => row.symbol))];
     } else if (exchange === "WEEX") {
-      const j = await fetchPublicJson(source);
-      if (!Array.isArray(j?.symbols)) throw new Error("WEEX contract-list schema check failed");
+      const [j, tradfiCatalog] = await Promise.all([
+        fetchPublicJson(source),
+        fetchPublicJson("https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=TRADIFI_PERPETUAL")
+      ]);
+      if (!Array.isArray(j?.symbols) || !Array.isArray(tradfiCatalog?.symbols)) {
+        throw new Error("WEEX contract catalog schema check failed");
+      }
+      const tradfiSymbols = new Set(tradfiCatalog.symbols.map(row => String(row?.symbol ?? "").toUpperCase()).filter(Boolean));
       symbols = [...new Set(j.symbols.filter(row => {
+        const symbol = String(row?.symbol ?? "");
         const status = String(row?.status ?? "").toUpperCase();
         return row?.contractType === "PERPETUAL" &&
           String(row?.underlyingType ?? "").toUpperCase() === "COIN" &&
-          usdtSymbol(exchange, row?.symbol) &&
+          usdtSymbol(exchange, symbol) &&
+          !tradfiSymbols.has(symbol.toUpperCase()) &&
           (!status || ["TRADING", "OPEN", "1"].includes(status)) &&
           String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT";
       }).map(row => row.symbol))];
