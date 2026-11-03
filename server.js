@@ -894,12 +894,7 @@ const spotCatalogProbes=[
   {exchange:"XT",kind:"spot_catalog_probe",symbol:"XT_SPOT_BASES",url:"https://sapi.xt.com/v4/public/symbol",check:j=>j?.rc===0&&Array.isArray(j?.result?.symbols)}
 ];
 const xtGroupCatalogProbes=[
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_FUTURES_GROUPS",url:"https://fapi.xt.com/future/market/v1/public/plate/list",check:j=>j?.returnCode===0&&j?.result!==null&&j?.result!==undefined},
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_TRADFI_PLATE_35",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=35",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_TOKENIZED_STOCKS_PLATE_31",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=31",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_FOREX_PLATE_41",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=41",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_COMMODITIES_PLATE_32",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=32",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_INDEX_PLATE_42",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=42",check:j=>j?.returnCode===0&&Array.isArray(j?.result)}
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_FUTURES_GROUPS",url:"https://fapi.xt.com/future/market/v1/public/plate/list",check:j=>j?.returnCode===0&&j?.result!==null&&j?.result!==undefined}
 ];
 const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...xtSymbolDetailProbes,...spotCatalogProbes,...xtGroupCatalogProbes,...symbolCoverageProbes,...oiHistoryProbes];
 async function runDeepProbe(probe) {
