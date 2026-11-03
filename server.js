@@ -215,7 +215,9 @@ async function collectExchangeOi(exchange, options = {}) {
       if (!Array.isArray(j?.symbols)) throw new Error("WEEX contract-list schema check failed");
       symbols = [...new Set(j.symbols.filter(row => {
         const status = String(row?.status ?? "").toUpperCase();
-        return row?.contractType === "PERPETUAL" && usdtSymbol(exchange, row?.symbol) &&
+        return row?.contractType === "PERPETUAL" &&
+          String(row?.underlyingType ?? "").toUpperCase() === "COIN" &&
+          usdtSymbol(exchange, row?.symbol) &&
           (!status || ["TRADING", "OPEN", "1"].includes(status)) &&
           String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT";
       }).map(row => row.symbol))];
