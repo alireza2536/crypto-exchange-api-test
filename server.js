@@ -780,7 +780,7 @@ function summarizeContractCatalog(exchange,j) {
   const classificationKeys = [
     "assetClass", "asset_class", "assetType", "asset_type", "baseAssetType", "baseAssetSubType",
     "marketType", "market_type", "businessType", "business_type", "productType", "product_type",
-    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel", "symbolGroupId"
+    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel"
   ];
   const classificationValues = {};
   const normalized=(Array.isArray(raw)?raw:[]).map(x=>{
@@ -804,9 +804,9 @@ function summarizeContractCatalog(exchange,j) {
   for(const row of (Array.isArray(raw)?raw:[])){
     const symbol=String(row?.symbol??row?.contract_code??"").toUpperCase();
     if(/(AAPL|AMD|NVDA|NVDAX|JP225|XAU|XAUT|SILVER|SPX|USOIL|BRENTOIL|META|BTC|ETH)/.test(symbol)){
-      const keys=["symbol","contract_code","typeLabel","baseCoinName","baseCoinNameEn","baseCoin","baseCurrency","enName","enDesc","cnName","cnDesc","symbolGroupId","business_type","category","productType","underlyingType","settleCoin","state"];
+      const keys=["symbol","contract_code","typeLabel","baseCoinName","baseCoin","enName","enDesc","business_type","category","settleCoin"];
       assetMetadataExamples.push(Object.fromEntries(keys.filter(key=>row[key]!==null&&row[key]!==undefined).map(key=>[key,row[key]])));
-      if(assetMetadataExamples.length>=40) break;
+      if(assetMetadataExamples.length>=12) break;
     }
   }
   for(const item of normalized){
