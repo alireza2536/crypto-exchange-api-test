@@ -802,7 +802,7 @@ function summarizeContractCatalog(exchange,j) {
   const classificationKeys = [
     "assetClass", "asset_class", "assetType", "asset_type", "baseAssetType", "baseAssetSubType",
     "marketType", "market_type", "businessType", "business_type", "productType", "product_type",
-    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel", "instCategory", "symbolGroupId"
+    "category", "symbolType", "instrumentType", "underlyingType", "typeLabel", "instCategory", "symbolGroupId", "plateId", "plateIds", "plate", "plates", "plateName", "plateNames"
   ];
   const classificationValues = {};
   const normalized=(Array.isArray(raw)?raw:[]).map(x=>{
@@ -885,7 +885,12 @@ const spotCatalogProbes=[
   {exchange:"XT",kind:"spot_catalog_probe",symbol:"XT_SPOT_BASES",url:"https://sapi.xt.com/v4/public/symbol",check:j=>j?.rc===0&&Array.isArray(j?.result?.symbols)}
 ];
 const xtGroupCatalogProbes=[
-  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_FUTURES_GROUPS",url:"https://fapi.xt.com/future/market/v1/public/plate/list",check:j=>j?.returnCode===0&&j?.result!==null&&j?.result!==undefined}
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_FUTURES_GROUPS",url:"https://fapi.xt.com/future/market/v1/public/plate/list",check:j=>j?.returnCode===0&&j?.result!==null&&j?.result!==undefined},
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_TRADFI_PLATE_35",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=35",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_TOKENIZED_STOCKS_PLATE_31",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=31",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_FOREX_PLATE_41",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=41",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_COMMODITIES_PLATE_32",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=32",check:j=>j?.returnCode===0&&Array.isArray(j?.result)},
+  {exchange:"XT",kind:"group_catalog_probe",symbol:"XT_INDEX_PLATE_42",url:"https://fapi.xt.com/future/market/v1/public/symbol/list?plateId=42",check:j=>j?.returnCode===0&&Array.isArray(j?.result)}
 ];
 const allDeepProbes=[...deepProbes,...fundingProbes,...contractListProbes,...synthetic2hProbes,...xtSymbolDetailProbes,...spotCatalogProbes,...xtGroupCatalogProbes,...symbolCoverageProbes,...oiHistoryProbes];
 async function runDeepProbe(probe) {
@@ -914,7 +919,7 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,symbol:probe.symbol??null,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,contractClassification:probe.kind==="contract_detail_probe"&&json?.result?Object.fromEntries(["assetClass","marketType","business_type","businessType","productType","underlyingType","type","category","symbolType","contractType","symbolGroupId","baseCoinName","baseCoin","baseCurrency","enName","enDesc","cnName","cnDesc","displayName","state"].filter(key=>json.result[key]!==null&&json.result[key]!==undefined).map(key=>[key,json.result[key]])):null,
+    return {exchange:probe.exchange,kind:probe.kind,symbol:probe.symbol??null,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,contractClassification:probe.kind==="contract_detail_probe"&&json?.result?Object.fromEntries(["assetClass","marketType","business_type","businessType","productType","underlyingType","type","category","symbolType","contractType","symbolGroupId","plateId","plateIds","plate","plates","plateName","plateNames","baseCoinName","baseCoin","baseCurrency","enName","enDesc","cnName","cnDesc","displayName","state"].filter(key=>json.result[key]!==null&&json.result[key]!==undefined).map(key=>[key,json.result[key]])):null,
     spotCatalogSummary:probe.kind==="spot_catalog_probe"?(()=>{const rows=probe.exchange==="HTX"?(json?.data||[]):(json?.result?.symbols||[]);const bases=new Set(rows.map(row=>String(probe.exchange==="HTX"?(row?.["base-currency"]??""):(row?.symbol??"").split("_")[0]).toUpperCase()).filter(Boolean));const examples=["BTC","ETH","AAPL","AMD","NVDA","NVDAX","JP225","JP225USD","XAU","XAUT","SILVER","SPX","USOIL","META"];const exampleRows=rows.filter(row=>examples.includes(String(probe.exchange==="HTX"?(row?.["base-currency"]??""):(row?.baseCurrency??String(row?.symbol??"").split("_")[0])).toUpperCase())).slice(0,25).map(row=>Object.fromEntries(["symbol","base-currency","baseCurrency","displayName","type","state","symbol-partition","baseCoin","quoteCurrency","quote-currency","productType","marketType","assetClass"].filter(key=>row[key]!==null&&row[key]!==undefined).map(key=>[key,row[key]])));const categoryCounts={};for(const row of rows){for(const key of ["type","state","symbol-partition"]){if(row[key]!==null&&row[key]!==undefined){const bucket=key+":"+String(row[key]);categoryCounts[bucket]=(categoryCounts[bucket]||0)+1;}}}return {count:rows.length,firstFields:Object.keys(rows[0]||{}).slice(0,20),categoryCounts,exampleBaseMembership:Object.fromEntries(examples.map(base=>[base,bases.has(base)])),exampleRows}})():null,
     groupCatalogSummary:probe.kind==="group_catalog_probe"?(()=>{const result=json?.result;const rows=Array.isArray(result)?result:Array.isArray(result?.list)?result.list:Array.isArray(result?.data)?result.data:Array.isArray(json?.data)?json.data:[];const fields=row=>Object.fromEntries(Object.entries(row||{}).filter(([key,value])=>value!==null&&value!==undefined&&/(id|name|desc|type|category|group|plate|code|symbol)/i.test(key)).slice(0,16));return {resultType:Array.isArray(result)?"array":typeof result,keys:result&&typeof result==="object"?Object.keys(result).slice(0,20):[],count:rows.length,sample:rows.slice(0,25).map(fields),preview:JSON.stringify(result).slice(0,1200)}})():null,
     synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
@@ -1427,7 +1432,7 @@ server.listen(PORT, "0.0.0.0", () => {
         error: x.error ?? null
       })),
       xtGroupIdSummary: xtCatalog?.contractStats?.classificationSummary?.symbolGroupId ?? null,
-      xtGroupCatalog: deep.results.find(x => x.kind === "group_catalog_probe")?.groupCatalogSummary ?? null
+      xtGroupCatalogs: deep.results.filter(x => x.kind === "group_catalog_probe").map(x => ({symbol:x.symbol,status:x.status,summary:x.groupCatalogSummary,error:x.error??null}))
     }));
     const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
     const historyBody = await historyResponse.json();
