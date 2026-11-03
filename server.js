@@ -1524,6 +1524,7 @@ server.listen(PORT, "0.0.0.0", () => {
     const passed = results.filter((item) => item.status === "PASS").length;
     console.log(JSON.stringify({ event: "startup_exchange_probe", finishedAt: new Date().toISOString(), passed, total: results.length, results }));
     await runDataSweep();
+    const htxAuditPromise = runHtxFrontendCatalogAudit();
     const deep = await runDeepSweep();
     console.log(JSON.stringify({
       event: "startup_deep_market_probe",
@@ -1572,7 +1573,7 @@ server.listen(PORT, "0.0.0.0", () => {
     const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
     const historyBody = await historyResponse.json();
     console.log(JSON.stringify({ event: "startup_history_depth_probe", httpStatus: historyResponse.status, ...historyBody }));
-    await runHtxFrontendCatalogAudit();
+    await htxAuditPromise;
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
   });
