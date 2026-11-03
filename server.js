@@ -1023,8 +1023,41 @@ async function runHtxFrontendCatalogAudit() {
       bundleAudit = { url: indexBundle, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout while reading HTX frontend bundle" : String(error.message || error) };
     }
   }
+  const htxCatalogProbes = await Promise.all([
+    { label: "hbg_all", url: "https://www.htx.com/-/x/hbg/v1/linear_swap_contract_info?business_type=all&trade_partition=ALL" },
+    { label: "hbg_crypto", url: "https://www.htx.com/-/x/hbg/v1/linear_swap_contract_info?business_type=all&trade_partition=CRYPTO" },
+    { label: "hbg_tradfi", url: "https://www.htx.com/-/x/hbg/v1/linear_swap_contract_info?business_type=all&trade_partition=TRADFI" },
+    { label: "pro_tradfi", url: "https://www.htx.com/-/x/pro/linear_swap_contract_info?business_type=all&trade_partition=TRADFI" }
+  ].map(async probe => {
+    try {
+      const response = await fetch(probe.url, {
+        headers: { accept: "application/json,*/*", referer: "https://www.htx.com/en-us/futures/" },
+        signal: AbortSignal.timeout(7000)
+      });
+      const raw = await response.text();
+      let json = null;
+      try { json = JSON.parse(raw); } catch {}
+      const possibleArrays = [json, json?.data, json?.result, json?.data?.list, json?.result?.list, json?.list, json?.data?.contracts];
+      const rows = possibleArrays.find(Array.isArray) ?? [];
+      const selectFields = row => Object.fromEntries(Object.entries(row ?? {})
+        .filter(([key]) => /symbol|contract|business|trade|partition|type|name|coin|status|asset|category/i.test(key))
+        .slice(0, 24));
+      const tradfiExamples = rows.filter(row => /(AAPL|NVDA|META|MSFT|JP225|XAU|USOIL|SPX500|NVDL|NVDAX)/i.test(JSON.stringify(row)))
+        .slice(0, 8).map(selectFields);
+      return {
+        label: probe.label, url: probe.url, status: response.status,
+        contentType: response.headers.get("content-type"), bodyLength: raw.length,
+        topKeys: json && typeof json === "object" ? Object.keys(json).slice(0, 25) : null,
+        rowCount: rows.length, sample: rows.slice(0, 3).map(selectFields), tradfiExamples,
+        bodyPreview: rows.length ? undefined : raw.slice(0, 240)
+      };
+    } catch (error) {
+      return { label: probe.label, url: probe.url, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout after 7000 ms" : String(error.message || error) };
+    }
+  }));
   console.log(JSON.stringify({ event: "htx_frontend_catalog_audit", results, bundleAudit }));
-  return { results, bundleAudit };
+  console.log(JSON.stringify({ event: "htx_official_partition_probe", probes: htxCatalogProbes }));
+  return { results, bundleAudit, htxCatalogProbes };
 }
 
 async function runWeexCatalogAudit(){
