@@ -168,14 +168,26 @@ async function collectExchangeOi(exchange, options = {}) {
     }
     if (!snapshots.length) throw new Error("MEXC returned no active USDT contract OI values");
   } else if (exchange === "OKX") {
-    const j = await fetchPublicJson(source);
+    const [j, catalog] = await Promise.all([
+      fetchPublicJson(source),
+      fetchPublicJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP")
+    ]);
     if (String(j?.code) !== "0" || !Array.isArray(j.data)) throw new Error("OKX open-interest schema/status check failed");
+    if (String(catalog?.code) !== "0" || !Array.isArray(catalog.data)) throw new Error("OKX SWAP instrument catalog schema/status check failed");
+    // OKX exposes the underlying asset category in official instrument metadata:
+    // 1 = Crypto, 3 = Stocks, with other categories for non-crypto assets.
+    const cryptoSwapIds = new Set(catalog.data
+      .filter(instrument => String(instrument?.instCategory) === "1")
+      .map(instrument => instrument?.instId)
+      .filter(Boolean));
+    if (!cryptoSwapIds.size) throw new Error("OKX instrument catalog returned no instruments explicitly classified as crypto");
     for (const row of j.data) {
-      if (usdtSymbol(exchange, row?.instId)) {
+      if (usdtSymbol(exchange, row?.instId) && cryptoSwapIds.has(row.instId)) {
         const snap = toSnapshot(exchange, row.instId, row.oi, source);
         if (snap) snapshots.push(snap);
       }
     }
+    if (!snapshots.length) throw new Error("OKX returned no crypto-classified USDT SWAP open-interest values");
   } else if (exchange === "KuCoin") {
     const j = await fetchPublicJson(source);
     if (String(j?.code) !== "200000") throw new Error("KuCoin open-interest schema/status check failed");
