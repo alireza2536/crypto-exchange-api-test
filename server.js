@@ -998,14 +998,20 @@ async function runHtxFrontendCatalogAudit() {
         signal: AbortSignal.timeout(10000)
       });
       const js = await response.text();
-      const pathCandidates = [...new Set([...js.matchAll(/["'`]((?:https?:)?\/[^"'`\s]{1,220})["'`]/g)]
-        .map(match => match[1])
-        .filter(value => /api|contract|market|symbol|tradfi|stock|asset|instrument|futures|future|list/i.test(value)))]
-        .slice(0, 45);
-      const termSnippets = [...js.matchAll(/.{0,90}(?:tradfi|businessType|assetClass|stock|marketType|symbolList|contractInfo|tradFi|assetType).{0,150}/gi)]
-        .slice(0, 15)
-        .map(match => match[0].replace(/\s+/g, " ").slice(0, 240));
-      bundleAudit = { url: indexBundle, status: response.status, contentType: response.headers.get("content-type"), bodyLength: js.length, pathCandidates, termSnippets };
+      const allStringValues = [...new Set([...js.matchAll(/["'\x60]([^"'\x60]{2,220})["'\x60]/g)].map(match => match[1]))];
+      const apiStringCandidates = allStringValues.filter(value =>
+        /(api\/|\/api|contract\/|market\/|symbol\/|tradfi|swap_contract|contract_info|linear-swap|businessType|business_type|assetClass|assetType|stock|forex)/i.test(value)
+      ).slice(0, 100);
+      const apiHosts = [...new Set([...js.matchAll(/https?:\/\/[^"'\x60\s]{1,180}/g)].map(match => match[0]))].slice(0, 20);
+      const targetedTerms = ["tradfi", "TradFi", "TRADFI", "assetClass", "assetType", "businessType", "business_type", "symbolGroupId", "contract_code", "contract_type", "stock", "commodity", "forex"];
+      const termSnippets = targetedTerms.map(term => {
+        const idx = js.toLowerCase().indexOf(term.toLowerCase());
+        return idx < 0 ? { term, found: false } : {
+          term, found: true, index: idx,
+          context: js.slice(Math.max(0, idx - 180), Math.min(js.length, idx + 320)).replace(/\s+/g, " ")
+        };
+      });
+      bundleAudit = { url: indexBundle, status: response.status, contentType: response.headers.get("content-type"), bodyLength: js.length, apiStringCandidates, apiHosts, termSnippets };
     } catch (error) {
       bundleAudit = { url: indexBundle, error: error.name === "AbortError" || error.name === "TimeoutError" ? "timeout while reading HTX frontend bundle" : String(error.message || error) };
     }
