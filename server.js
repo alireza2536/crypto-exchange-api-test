@@ -228,8 +228,13 @@ async function collectExchangeOi(exchange, options = {}) {
     const totalDiscoveredSymbols = symbols.length;
     const cursorIndex = Math.max(0, Number(options.cursorIndex) || 0) % totalDiscoveredSymbols;
     const batchLimit = Math.max(1, Number(options.batchLimit) || OI_ROTATING_BATCH_SIZE);
-    const retrySymbols = [...new Set((Array.isArray(options.retrySymbols) ? options.retrySymbols : [])
-      .filter(symbol => symbols.includes(symbol)))].slice(0, batchLimit);
+    const allRetrySymbols = [...new Set((Array.isArray(options.retrySymbols) ? options.retrySymbols : [])
+      .filter(symbol => symbols.includes(symbol)))];
+    // Reserve at most one third of each rotating batch for retries so persistent
+    // failures cannot stall the cursor or starve new symbols.
+    const retryLimit = Math.min(5, Math.max(1, Math.floor(batchLimit / 3)));
+    const retrySymbols = allRetrySymbols.slice(0, retryLimit);
+    const deferredRetrySymbols = allRetrySymbols.slice(retrySymbols.length);
     const freshSlots = Math.max(0, batchLimit - retrySymbols.length);
     const freshSymbols = [];
     for (let i = 0; i < totalDiscoveredSymbols && freshSymbols.length < freshSlots; i++) {
@@ -281,7 +286,10 @@ async function collectExchangeOi(exchange, options = {}) {
       : null).filter(Boolean);
     snapshots.partialFailures = failedResults.length;
     snapshots.partialFailureDetails = failedResults;
-    snapshots.nextRetrySymbols = failedResults.map(item => item.symbol);
+    snapshots.nextRetrySymbols = [...new Set([
+      ...deferredRetrySymbols,
+      ...failedResults.map(item => item.symbol)
+    ])];
     snapshots.discoveredSymbols = totalDiscoveredSymbols;
     snapshots.batchSize = batchSymbols.length;
     snapshots.nextCursorIndex = (cursorIndex + freshSymbols.length) % totalDiscoveredSymbols;
