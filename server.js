@@ -192,7 +192,7 @@ async function collectExchangeOi(exchange, options = {}) {
     const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
     for (const contract of contracts.data) {
       const typeLabel = Number(contract?.typeLabel ?? 0); // Only official normal/crypto label 0 is accepted; all nonzero labels are excluded conservatively.
-      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0) continue;
+      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0 || isExplicitTradFiContract(contract)) continue;
       const ticker = tickerBySymbol.get(contract.symbol);
       const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
       if (snap) snapshots.push(snap);
@@ -754,7 +754,11 @@ function buildSynthetic1dUtc(exchange,j) {
 const xtSymbolDetailProbes=[
   {exchange:"XT",kind:"contract_detail_probe",symbol:"BTC_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"NVDAx_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=nvdax_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
-  {exchange:"XT",kind:"contract_detail_probe",symbol:"JP225USD_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=jp225usd_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"JP225USD_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=jp225usd_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"XAU_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=xau_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"SILVER_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=silver_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"SPX_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=spx_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"META_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=meta_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}
 ];
 const synthetic2hProbes = [
   {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
