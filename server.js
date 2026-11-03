@@ -147,7 +147,7 @@ async function collectExchangeOi(exchange, options = {}) {
     OKX: "https://www.okx.com/api/v5/public/open-interest?instType=SWAP",
     WEEX: "https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",
     HTX: "https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",
-    KuCoin: "https://api.kucoin.com/api/ua/v2/market/open-interest",
+    KuCoin: "https://api-futures.kucoin.com/api/v1/contracts/active",
     XT: "https://fapi.xt.com/future/market/v1/public/symbol/list"
   }[exchange];
   const snapshots = [];
@@ -161,7 +161,7 @@ async function collectExchangeOi(exchange, options = {}) {
     }
     const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
     for (const contract of contracts.data) {
-      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol)) continue;
+      const typeLabel = Number(contract?.typeLabel ?? 0); // Official MEXC metadata: 0 normal, 1 TradFi, 2 stock.\n      if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0) continue;
       const ticker = tickerBySymbol.get(contract.symbol);
       const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
       if (snap) snapshots.push(snap);
@@ -190,16 +190,21 @@ async function collectExchangeOi(exchange, options = {}) {
     if (!snapshots.length) throw new Error("OKX returned no crypto-classified USDT SWAP open-interest values");
   } else if (exchange === "KuCoin") {
     const j = await fetchPublicJson(source);
-    if (String(j?.code) !== "200000") throw new Error("KuCoin open-interest schema/status check failed");
-    const rows = rowsFrom(j.data?.data ?? j.data?.items ?? j.data?.list ?? j.data);
-    for (const row of rows) {
-      const symbol = row?.symbol ?? row?.contractSymbol;
-      if (usdtSymbol(exchange, symbol)) {
-        const snap = toSnapshot(exchange, symbol, row?.openInterest ?? row?.value, source);
-        if (snap) snapshots.push(snap);
-      }
+    if (String(j?.code) !== "200000" || !Array.isArray(j?.data)) throw new Error("KuCoin official active-contract catalog schema/status check failed");
+    for (const row of j.data) {
+      const symbol = row?.symbol;
+      const categories = [row?.marketType, row?.assetClass]
+        .filter(value => value !== null && value !== undefined && String(value).trim() !== "")
+        .map(value => String(value).toUpperCase());
+      // KuCoin's official contract catalog classifies TradFi and crypto separately.
+      if (!categories.length || categories.some(category => category !== "CRYPTO")) continue;
+      if (String(row?.quoteCurrency ?? "").toUpperCase() !== "USDT" ||
+          String(row?.settleCurrency ?? "").toUpperCase() !== "USDT" ||
+          !usdtSymbol(exchange, symbol)) continue;
+      const snap = toSnapshot(exchange, symbol, row?.openInterest, source);
+      if (snap) snapshots.push(snap);
     }
-    if (!snapshots.length) throw new Error("KuCoin returned no parseable USDT-M open-interest rows");
+    if (!snapshots.length) throw new Error("KuCoin returned no explicitly crypto-classified USDT-M open-interest rows");
   } else {
     let symbols = [];
     if (exchange === "BingX") {
