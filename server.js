@@ -1050,10 +1050,10 @@ async function runHtxFrontendCatalogAudit() {
     }
   }));
   const htxCatalogProbes = await Promise.all([
-    { label: "x_v1_all", url: "https://www.htx.com/-/x/v1/linear_swap_contract_info?business_type=all&trade_partition=ALL" },
-    { label: "x_v1_crypto", url: "https://www.htx.com/-/x/v1/linear_swap_contract_info?business_type=all&trade_partition=CRYPTO" },
-    { label: "x_v1_tradfi", url: "https://www.htx.com/-/x/v1/linear_swap_contract_info?business_type=all&trade_partition=TRADFI" },
-    { label: "plain_x_v1_all", url: "https://www.htx.com/x/v1/linear_swap_contract_info?business_type=all&trade_partition=ALL" }  ].map(async probe => {
+    { label: "api_hbdm_linear_contract_all", url: "https://api.hbdm.com/linear-swap-api/v1/linear_swap_contract_info?business_type=all&trade_partition=ALL" },
+    { label: "api_hbdm_linear_contract_crypto", url: "https://api.hbdm.com/linear-swap-api/v1/linear_swap_contract_info?business_type=all&trade_partition=CRYPTO" },
+    { label: "api_hbdm_linear_contract_tradfi", url: "https://api.hbdm.com/linear-swap-api/v1/linear_swap_contract_info?business_type=all&trade_partition=TRADFI" },
+    { label: "api_hbdm_swap_contract_all", url: "https://api.hbdm.com/linear-swap-api/v1/swap_contract_info?business_type=all&trade_partition=ALL" }  ].map(async probe => {
     try {
       const response = await fetch(probe.url, {
         headers: { accept: "application/json,*/*", referer: "https://www.htx.com/en-us/futures/" },
