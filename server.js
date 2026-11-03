@@ -977,10 +977,10 @@ async function runHtxFrontendCatalogAudit() {
       const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)]
         .map(match => { try { return new URL(match[1], url).toString(); } catch { return match[1]; } })
         .slice(0, 20);
-      const markers = [...html.matchAll(/.{0,100}(?:tradfi|assetClass|businessType|contractInfo|market\\/list|symbol\\/list|stocks|commodities|__NEXT_DATA__|__INITIAL_STATE__).{0,160}/gi)]
+      const markers = [...html.matchAll(/.{0,100}(?:tradfi|assetClass|businessType|contractInfo|market\/list|symbol\/list|stocks|commodities|__NEXT_DATA__|__INITIAL_STATE__).{0,160}/gi)]
         .slice(0, 12)
-        .map(match => match[0].replace(/\\s+/g, " ").slice(0, 260));
-      const title = html.match(/<title[^>]*>(.*?)<\\/title>/i)?.[1]?.replace(/\\s+/g, " ").slice(0, 180) ?? null;
+        .map(match => match[0].replace(/\s+/g, " ").slice(0, 260));
+      const title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").slice(0, 180) ?? null;
       return { url, status: response.status, finalUrl: response.url, contentType: response.headers.get("content-type"), bodyLength: html.length, title, scripts, markers };
     } catch (error) {
       return { url, status: null, error: error.name === "AbortError" ? "timeout after 7000 ms" : String(error.message || error) };
