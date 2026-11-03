@@ -743,7 +743,11 @@ function buildSynthetic1dUtc(exchange,j) {
   }
   return null;
 }
-const xtSymbolDetailProbes=[{exchange:"XT",kind:"contract_detail_probe",symbol:"BTC_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}];
+const xtSymbolDetailProbes=[
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"BTC_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=btc_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"NVDAx_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=nvdax_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"JP225USD_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=jp225usd_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}
+];
 const synthetic2hProbes = [
   {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
   {exchange:"WEEX",kind:"synthetic_2h",check:j=>true,url:"https://api-contract.weex.com/capi/v3/market/klines?symbol=BTCUSDT&interval=1h&limit=10"},
@@ -794,6 +798,14 @@ function summarizeContractCatalog(exchange,j) {
   }).filter(Boolean);
   const classificationSummary=Object.fromEntries(Object.entries(classificationValues)
     .map(([key,values])=>[key,{distinctValues:values.size,sample:[...values].slice(0,12)}]));
+  const classificationExamples={};
+  for(const item of normalized){
+    for(const [key,value] of Object.entries(item.classification||{})){
+      const bucket=key+":"+value;
+      if(!classificationExamples[bucket]) classificationExamples[bucket]=[];
+      if(classificationExamples[bucket].length<8) classificationExamples[bucket].push(item.symbol);
+    }
+  }
   const symbols=normalized.map(x=>String(x.symbol||"").trim().toUpperCase()).filter(Boolean);
   const unique=new Set(symbols);
   const active=normalized.filter(x=>x.active===true).length;
@@ -804,7 +816,7 @@ function summarizeContractCatalog(exchange,j) {
   const inactive=normalized.filter(x=>x.active===false).length;
   const unknownStatus=normalized.filter(x=>x.active===null).length;
   const btcAliases=exchange==="MEXC"?["BTC_USDT"]:exchange==="BingX"?["BTC-USDT"]:exchange==="OKX"?["BTC-USDT-SWAP"]:exchange==="WEEX"?["BTCUSDT"]:exchange==="HTX"?["BTC-USDT"]:exchange==="KuCoin"?["XBTUSDTM","BTCUSDTM"]:["BTC_USDT"];
-  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),classificationSummary,sample:normalized.slice(0,5)};
+  return {rawCount:Array.isArray(raw)?raw.length:0,normalizedCount:normalized.length,uniqueSymbolCount:unique.size,duplicateSymbolCount:symbols.length-unique.size,missingSymbolCount:normalized.length-symbols.length,activeCount:active,inactiveCount:inactive,unknownStatusCount:unknownStatus,marketDataAvailableCount,usdtSettledCount,activeUsdtSettledCount,inverseCount,benchmarkFound:btcAliases.some(x=>unique.has(x)),classificationSummary,classificationExamples,sample:normalized.slice(0,5)};
 }
 const contractListProbes = [
   {exchange:"MEXC",kind:"contract_list",url:"https://api.mexc.com/api/v1/contract/detail",check:j=>j?.success===true&&j?.code===0&&Array.isArray(j?.data)&&j.data.some(x=>x?.symbol==="BTC_USDT"),count:j=>j.data.length},
@@ -880,7 +892,7 @@ async function runDeepProbe(probe) {
       fresh=ageMs!==null&&ageMs>=-120000&&ageMs<=maxAge;
       schemaOk=schemaOk&&fresh;
     }
-    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
+    return {exchange:probe.exchange,kind:probe.kind,status:response.ok&&schemaOk?"PASS":"FAIL",httpStatus:response.status,latencyMs:Date.now()-started,retryCount,schemaOk,contractCount:["contract_list","market_symbol_list"].includes(probe.kind)?probe.count(json):null,contractStats:["contract_list","market_symbol_list"].includes(probe.kind)?summarizeContractCatalog(probe.exchange,json):null,contractClassification:probe.kind==="contract_detail_probe"&&json?.result?Object.fromEntries(["assetClass","marketType","business_type","businessType","productType","underlyingType","type","category","symbolType","contractType"].filter(key=>json.result[key]!==null&&json.result[key]!==undefined).map(key=>[key,json.result[key]])):null,synthetic2h,synthetic1dUtc,oiHistoryAt:oiHistoryAt?new Date(oiHistoryAt).toISOString():null,oiHistoryAgeMinutes,oiHistoryFresh,latestCandleAt:latestCandleAt?new Date(latestCandleAt).toISOString():null,candleAgeMinutes:ageMs===null?null:Math.round(ageMs/60000),fresh,endpoint:probe.url,preview:raw.slice(0,220),error:!response.ok?`HTTP ${response.status}`:!json?"Invalid JSON":!schemaOk?(fresh===false?"Candle data is stale or timestamp is outside allowed clock skew":Number(json?.code)===510?"MEXC rate limit (code 510) after retries":"Response schema/value check failed"):null};
   }catch(error){return {exchange:probe.exchange,kind:probe.kind,status:"FAIL",httpStatus:null,latencyMs:Date.now()-started,schemaOk:false,endpoint:probe.url,preview:"",error:error.name==="AbortError"?`Timeout after ${TIMEOUT_MS} ms`:String(error.message||error)}}
   }
 async function runWeexCatalogAudit(){
