@@ -125,6 +125,9 @@ function positiveOi(value) {
 }
 function rowsFrom(value) { return Array.isArray(value) ? value : value ? [value] : []; }
 function isExplicitTradFiContract(row) {
+  // XT official plate IDs for non-crypto products: TradFi, Tokenized Stocks, Commodities, Pre-Market, Forex, INDEX.
+  const xtNonCryptoPlateIds = new Set([31, 32, 35, 39, 41, 42]);
+  if (Array.isArray(row?.plates) && row.plates.some(id => xtNonCryptoPlateIds.has(Number(id)))) return true;
   // Prefer exchange-provided asset-class metadata whenever it exists.
   const fields = [
     row?.assetClass, row?.asset_class, row?.assetType, row?.asset_type,
