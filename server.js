@@ -785,7 +785,12 @@ const xtSymbolDetailProbes=[
   {exchange:"XT",kind:"contract_detail_probe",symbol:"XAU_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=xau_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"SILVER_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=silver_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
   {exchange:"XT",kind:"contract_detail_probe",symbol:"SPX_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=spx_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
-  {exchange:"XT",kind:"contract_detail_probe",symbol:"META_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=meta_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"META_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=meta_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"SOL_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=sol_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"XRP_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=xrp_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"DOGE_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=doge_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"PEPE_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=pepe_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"},
+  {exchange:"XT",kind:"contract_detail_probe",symbol:"SHIB_USDT",url:"https://fapi.xt.com/future/market/v1/public/symbol/detail?symbol=shib_usdt",check:j=>j?.returnCode===0&&j?.result&&typeof j.result==="object"}
 ];
 const synthetic2hProbes = [
   {exchange:"MEXC",kind:"synthetic_2h",check:j=>true,url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60"},
