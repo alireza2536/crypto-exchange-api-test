@@ -134,7 +134,7 @@ function isExplicitTradFiContract(row) {
   ];
   const normalized = fields
     .filter(value => value !== null && value !== undefined && String(value).trim() !== "")
-    .map(value => String(value).trim().toLowerCase().replace(/[\\s_-]+/g, ""));
+    .map(value => String(value).trim().toLowerCase().replace(/[\s_-]+/g, ""));
   return normalized.some(value =>
     /^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(value)
   );
