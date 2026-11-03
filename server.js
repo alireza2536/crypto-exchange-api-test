@@ -1018,7 +1018,8 @@ async function runDataProbe(probe) {
     try{
       const response=await fetch(probe.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:controller.signal});
       const raw=await response.text(); let json; try{json=JSON.parse(raw)}catch{json=null}
-      const transient= response.status===429 || response.status>=500 || (probe.exchange==="MEXC" && Number(json?.code)===510);
+      const apiCode = Number(json?.code ?? json?.returnCode ?? json?.error?.code);
+      const transient = response.status===429 || response.status>=500 || [100410,100429].includes(apiCode) || (probe.exchange==="MEXC" && apiCode===510);
       if(transient && attempt<maxAttempts-1){
         lastResult={httpStatus:response.status,raw,json};
         clearTimeout(timer);
