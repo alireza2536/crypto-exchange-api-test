@@ -697,8 +697,17 @@ async function getOiSnapshotStatus() {
   };
   if (oiSnapshotPool && oiSnapshotDbReady) {
     try {
-      const result = await oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, MAX(collected_at) AS last_collected_at FROM oi_snapshots GROUP BY exchange ORDER BY exchange");
-      status.coverage = result.rows;
+      const [recentResult, coverageResult] = await Promise.all([
+        oiSnapshotPool.query("SELECT COUNT(*)::int AS recent_saved, MAX(collected_at) AS recent_last_run_at FROM oi_snapshots WHERE collected_at >= NOW() - INTERVAL '15 minutes'"),
+        oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, MAX(collected_at) AS last_collected_at, COUNT(*) FILTER (WHERE collected_at >= NOW() - INTERVAL '15 minutes')::int AS snapshots_last_15m FROM oi_snapshots GROUP BY exchange ORDER BY exchange")
+      ]);
+      const recent = recentResult.rows[0] || {};
+      status.lastSaved = Number(recent.recent_saved || 0);
+      status.lastRunAt = recent.recent_last_run_at
+        ? new Date(recent.recent_last_run_at).toISOString()
+        : oiSnapshotLastRunAt;
+      status.recentSnapshotsWindowMinutes = 15;
+      status.coverage = coverageResult.rows;
     } catch (error) { status.queryError = String(error.message || error); }
   }
   return status;
