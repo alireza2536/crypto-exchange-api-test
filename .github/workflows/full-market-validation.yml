@@ -1,0 +1,123 @@
+name: Full seven-exchange market validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/full-market-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for the API service to be healthy
+        run: |
+          set -eu
+          for attempt in $(seq 1 18); do
+            if curl --silent --show-error --fail --max-time 30 "https://exchange-api-connectivity-test.onrender.com/health" -o health.json; then
+              cat health.json
+              node -e 'const h=require("./health.json"); if(!h.ok||!h.openInterestHistory?.databaseReady)process.exit(1)'
+              exit 0
+            fi
+            echo "Service not ready yet (attempt $attempt/18)"
+            sleep 10
+          done
+          echo "API service did not become healthy"
+          exit 1
+
+      - name: Run complete historical-depth and deep-market tests
+        env:
+          BASE_URL: https://exchange-api-connectivity-test.onrender.com
+        run: |
+          set +e
+          failures=0
+          for endpoint in api/deep-test api/history-depth-15m-test api/history-depth-1h-test api/history-depth-2h-test api/history-depth-test api/history-depth-1d-test; do
+            echo "===== TEST $endpoint ====="
+            out="$(echo "$endpoint" | tr '/' '-')".json
+            if ! curl --silent --show-error --fail --retry 2 --retry-delay 3 --max-time 1800 "$BASE_URL/$endpoint" -o "$out"; then
+              echo "ENDPOINT_FAIL $endpoint"
+              failures=$((failures+1))
+              continue
+            fi
+            node - "$out" "$endpoint" <<'NODE'
+          const fs=require("fs");
+          const [file,endpoint]=process.argv.slice(2);
+          const b=JSON.parse(fs.readFileSync(file,"utf8"));
+          console.log(JSON.stringify({
+            endpoint,
+            finishedAt:b.finishedAt,
+            passed:b.passed,
+            total:b.total,
+            failed:b.failed,
+            notListed:b.notListed,
+            historyReadyCount:b.historyReadyCount,
+            results:(b.results||[]).map(x=>({
+              exchange:x.exchange,
+              kind:x.kind,
+              status:x.status,
+              historyReady:x.historyReady,
+              uniqueCandles:x.uniqueCandles,
+              requestedCandles:x.requestedCandles,
+              gapCount:x.gapCount,
+              cciReady:x.cciReady,
+              cci1200:x.cci1200,
+              error:x.error
+            }))
+          }));
+          let ok=true;
+          if(endpoint.startsWith("api/history-depth-")) ok=b.historyReadyCount===7;
+          if(endpoint==="api/history-depth-test") ok=b.historyReadyCount===7;
+          if(endpoint==="api/deep-test") {
+            const funding=(b.results||[]).filter(x=>x.kind==="funding_rate");
+            ok=funding.length===7&&funding.every(x=>x.status==="PASS");
+          }
+          if(!ok)process.exit(2);
+          NODE
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "VALIDATION_NOT_READY $endpoint (exit $rc)"
+              failures=$((failures+1))
+            fi
+          done
+          echo "Historical/deep test failure count: $failures"
+          if [ "$failures" -ne 0 ]; then exit 1; fi
+
+      - name: Validate 15-minute volume and calculate VWAP for all seven exchanges
+        run: |
+          node <<'NODE'
+          const specs=[
+            {exchange:"MEXC",url:"https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min15",rows:j=>(j.data?.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(j.data.open?.[i]),h:Number(j.data.high?.[i]),l:Number(j.data.low?.[i]),c:Number(j.data.close?.[i]),v:Number(j.data.vol?.[i]??j.data.volume?.[i])}))},
+            {exchange:"BingX",url:"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=15m&limit=100",rows:j=>(j.data||[]).map(x=>({t:Number(x.time),o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.volume??x.vol)}))},
+            {exchange:"OKX",url:"https://www.okx.com/api/v5/market/history-candles?instId=BTC-USDT-SWAP&bar=15m&limit=100",rows:j=>(j.data||[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
+            {exchange:"WEEX",url:"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=15m&limit=100",rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
+            {exchange:"HTX",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=15min&size=100",rows:j=>(j.data||[]).map(x=>({t:Number(x.id)*1000,o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.vol??x.amount)}))},
+            {exchange:"KuCoin",url:"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=15",rows:j=>(j.data||[]).map(x=>({t:Number(x[0])>1e12?Number(x[0]):Number(x[0])*1000,o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
+            {exchange:"XT",url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=15m&limit=100",rows:j=>(j.result||[]).map(x=>({t:Number(x.t),o:Number(x.o),h:Number(x.h),l:Number(x.l),c:Number(x.c),v:Number(x.a??x.v??x.volume)}))}
+          ];
+          const results=await Promise.all(specs.map(async s=>{
+            try{
+              const r=await fetch(s.url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:AbortSignal.timeout(30000)});
+              const j=await r.json();
+              const schemaOk=r.ok&&(
+                s.exchange==="MEXC"?(j.success===true||j.code===0):
+                s.exchange==="BingX"?(j.code===0||j.code==="0"):
+                s.exchange==="OKX"?String(j.code)==="0":
+                s.exchange==="HTX"?j.status==="ok":
+                s.exchange==="KuCoin"?String(j.code)==="200000":
+                s.exchange==="XT"?j.returnCode===0:Array.isArray(j)
+              );
+              const rows=s.rows(j).filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.o>0&&x.c>0&&x.h>=Math.max(x.o,x.c)&&x.l<=Math.min(x.o,x.c)&&x.h>=x.l&&x.v>0);
+              const totalVolume=rows.reduce((n,x)=>n+x.v,0);
+              const weighted=rows.reduce((n,x)=>n+((x.h+x.l+x.c)/3)*x.v,0);
+              const vwap=totalVolume>0?weighted/totalVolume:null;
+              return {exchange:s.exchange,status:schemaOk&&rows.length>=30&&Number.isFinite(vwap)?"PASS":"FAIL",httpStatus:r.status,validVolumeBars:rows.length,totalVolume,vwap:Number.isFinite(vwap)?Number(vwap.toFixed(10)):null,latestBarAt:rows.length?new Date(Math.max(...rows.map(x=>x.t))).toISOString():null,error:!schemaOk?"API response/schema failed":rows.length<30?"Fewer than 30 valid OHLCV bars":totalVolume<=0?"Volume sum is not positive":null};
+            }catch(e){return {exchange:s.exchange,status:"FAIL",error:String(e.message||e)}}
+          }));
+          console.log(JSON.stringify({event:"seven_exchange_15m_volume_vwap_test",at:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results},null,2));
+          if(results.some(x=>x.status!=="PASS"))process.exit(1);
+          NODE
