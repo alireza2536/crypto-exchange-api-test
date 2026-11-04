@@ -11,9 +11,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: oi-collector-keepalive
-  cancel-in-progress: false
 
 jobs:
   ping:
