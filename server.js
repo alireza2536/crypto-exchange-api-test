@@ -1589,7 +1589,7 @@ const server = http.createServer(async (req, res) => {
           const oldest=parsed.length?Math.min(...parsed.map(x=>x.t)):null;
           pageReports.push({page:page+1,rows:parsed.length,uniqueTotal:uniqueNow.length,oldestAt:oldest?new Date(oldest).toISOString():null});
           if(uniqueNow.length>=targetCandles||parsed.length===0||oldest===null)break;
-          if(["MEXC","HTX"].includes(spec.exchange))break;
+          if(["HTX"].includes(spec.exchange))break;
           const nextCursor=oldest-1;
           if(cursor!==null&&nextCursor>=cursor){lastError="Pagination cursor did not move backward";break}
           cursor=nextCursor;
