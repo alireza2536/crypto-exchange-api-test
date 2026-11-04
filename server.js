@@ -275,8 +275,7 @@ async function collectExchangeOi(exchange, options = {}) {
       }
       if (!apiTradingSymbols.length) throw new Error("WEEX API-trading catalog returned no symbols; refusing an unverified collection universe");
       const tradfiSymbols = new Set(tradfiCatalog.symbols.map(row => String(row?.symbol ?? "").toUpperCase()).filter(Boolean));
-      const apiTradableSet = new Set(apiTradingSymbols.map(symbol => String(symbol).toUpperCase()).filter(Boolean));
-      symbols = [...new Set(j.symbols.filter(row => {
+      const cryptoCatalogSymbols = new Set(j.symbols.filter(row => {
         const symbol = String(row?.symbol ?? "");
         const normalizedSymbol = symbol.toUpperCase();
         const status = String(row?.status ?? "").toUpperCase();
@@ -284,10 +283,42 @@ async function collectExchangeOi(exchange, options = {}) {
           String(row?.underlyingType ?? "").toUpperCase() === "COIN" &&
           usdtSymbol(exchange, symbol) &&
           !tradfiSymbols.has(normalizedSymbol) &&
-          apiTradableSet.has(normalizedSymbol) &&
           (!status || ["TRADING", "OPEN", "1"].includes(status)) &&
           String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT";
+      }).map(row => String(row.symbol).toUpperCase()));
+      // WEEX's API-trading list contains a few S-suffixed aliases (e.g. BTCSUSDT)
+      // while exchangeInfo and market-data endpoints use canonical symbols (BTCUSDT).
+      // Normalize only when the canonical form exists in the verified crypto catalog.
+      const apiTradableSet = new Set(apiTradingSymbols.map(symbol => {
+        const upper = String(symbol).toUpperCase();
+        const canonical = upper.replace(/SUSDT$/, "USDT");
+        return cryptoCatalogSymbols.has(canonical) ? canonical : upper;
+      }).filter(Boolean));
+      const exactApiMatches = [...cryptoCatalogSymbols].filter(symbol =>
+        apiTradingSymbols.some(item => String(item).toUpperCase() === symbol)
+      ).length;
+      const aliasApiMatches = [...cryptoCatalogSymbols].filter(symbol => apiTradableSet.has(symbol) &&
+        !apiTradingSymbols.some(item => String(item).toUpperCase() === symbol)
+      ).length;
+      symbols = [...new Set(j.symbols.filter(row => {
+        const symbol = String(row?.symbol ?? "");
+        const normalizedSymbol = symbol.toUpperCase();
+        return cryptoCatalogSymbols.has(normalizedSymbol) && apiTradableSet.has(normalizedSymbol);
       }).map(row => row.symbol))];
+      console.log(JSON.stringify({
+        event: "weex_contract_classification",
+        perpetualCatalogRows: j.symbols.length,
+        tradfiCatalogRows: tradfiCatalog.symbols.length,
+        apiTradingSymbols: apiTradingSymbols.length,
+        exactApiMatches,
+        aliasApiMatches,
+        discoveredCryptoSymbols: symbols.length,
+        unresolvedApiTradingSymbols: apiTradingSymbols.filter(item => {
+          const upper = String(item).toUpperCase();
+          const canonical = upper.replace(/SUSDT$/, "USDT");
+          return !apiTradableSet.has(upper) && !cryptoCatalogSymbols.has(canonical) && !tradfiSymbols.has(upper);
+        }).length
+      }));
     } else if (exchange === "HTX") {
       const j = await fetchPublicJson(source);
       if (j?.status !== "ok" || !Array.isArray(j.data)) throw new Error("HTX contract-list schema/status check failed");
