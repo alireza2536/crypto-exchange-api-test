@@ -697,9 +697,10 @@ async function getOiSnapshotStatus() {
   };
   if (oiSnapshotPool && oiSnapshotDbReady) {
     try {
-      const [recentResult, coverageResult] = await Promise.all([
+      const [recentResult, coverageResult, collectionStateResult] = await Promise.all([
         oiSnapshotPool.query("SELECT COUNT(*)::int AS recent_saved, MAX(collected_at) AS recent_last_run_at FROM oi_snapshots WHERE collected_at >= NOW() - INTERVAL '15 minutes'"),
-        oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, MAX(collected_at) AS last_collected_at, COUNT(*) FILTER (WHERE collected_at >= NOW() - INTERVAL '15 minutes')::int AS snapshots_last_15m FROM oi_snapshots GROUP BY exchange ORDER BY exchange")
+        oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, MAX(collected_at) AS last_collected_at, COUNT(*) FILTER (WHERE collected_at >= NOW() - INTERVAL '15 minutes')::int AS snapshots_last_15m, COUNT(DISTINCT symbol) FILTER (WHERE collected_at >= NOW() - INTERVAL '65 minutes')::int AS unique_symbols_last_65m FROM oi_snapshots GROUP BY exchange ORDER BY exchange"),
+        oiSnapshotPool.query("SELECT exchange, cursor_index, last_collection_at, last_bulk_collection_at, last_discovered_count FROM oi_collection_state ORDER BY exchange")
       ]);
       const recent = recentResult.rows[0] || {};
       status.lastSaved = Number(recent.recent_saved || 0);
@@ -708,6 +709,7 @@ async function getOiSnapshotStatus() {
         : oiSnapshotLastRunAt;
       status.recentSnapshotsWindowMinutes = 15;
       status.coverage = coverageResult.rows;
+      status.collectionState = collectionStateResult.rows;
     } catch (error) { status.queryError = String(error.message || error); }
   }
   return status;
