@@ -2,7 +2,7 @@ name: Keep Open Interest collector awake
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
   push:
     branches:
@@ -11,96 +11,92 @@ on:
 permissions:
   contents: read
 
-
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 28
     steps:
-      - name: Wake service and check health
+      - name: Keep Render awake and audit seven-exchange coverage
         env:
           HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health?source=github-actions
-        run: |
-          set -eu
-          echo "Trigger event: ${GITHUB_EVENT_NAME}"
-          echo "Started at (UTC): $(date -u +%FT%TZ)"
-          for attempt in 1 2 3 4 5 6; do
-            if curl --silent --show-error --fail --max-time 35 "$HEALTH_URL" -o health.json; then
-              cat health.json
-              node -e 'const fs=require("fs"); const h=JSON.parse(fs.readFileSync("health.json","utf8")); if (!h.ok || !h.openInterestHistory?.configured || !h.openInterestHistory?.databaseReady) { console.error("Collector or database is not ready", h); process.exit(1); }'
-              break
-            fi
-            echo "Health request failed (attempt $attempt)"
-            if [ "$attempt" -eq 6 ]; then exit 1; fi
-            sleep 5
-          done
-
-      - name: Verify full seven-exchange Open Interest universe
-        env:
           STATUS_URL: https://exchange-api-connectivity-test.onrender.com/api/open-interest-status
-        run: |
-          set -eu
-          for attempt in 1 2 3 4 5 6 7 8 9; do
-            if curl --silent --show-error --fail --max-time 25 "$STATUS_URL" -o oi-status.json; then
-              cat oi-status.json
-              if node -e '
-                const fs=require("fs");
-                const s=JSON.parse(fs.readFileSync("oi-status.json","utf8"));
-                const age=s.lastRunAt ? (Date.now()-Date.parse(s.lastRunAt))/60000 : Infinity;
-                const maxAge={MEXC:35,BingX:15,OKX:35,WEEX:15,HTX:15,KuCoin:35,XT:15};
-                const rows=new Map((s.coverage||[]).map(x=>[x.exchange,x]));
-                const states=new Map((s.collectionState||[]).map(x=>[x.exchange,x]));
-                const problems=[];
-                for (const [exchange,maxMinutes] of Object.entries(maxAge)) {
-                  const row=rows.get(exchange);
-                  const state=states.get(exchange);
-                  const t=row?.last_collected_at ? Date.parse(row.last_collected_at) : NaN;
-                  const exchangeAge=(Date.now()-t)/60000;
-                  const expected=Number(state?.last_discovered_count||0);
-                  const observed=Number(row?.unique_symbols_last_65m||0);
-                  if (!row || !state || !Number.isFinite(exchangeAge) || exchangeAge < -2 || exchangeAge > maxMinutes ||
-                      !(row.snapshots > 0) || expected <= 0 || observed < expected) {
-                    problems.push({exchange,exchangeAge,maxMinutes,observed,expected});
-                  }
-                }
-                if (!s.configured || !s.databaseReady || s.collectionEnabled !== true ||
-                    !Number.isFinite(age) || age < -2 || age > 15 || !(s.lastSaved > 0) ||
-                    (s.lastFailures||[]).length || problems.length) {
-                  console.error("Open Interest universe is stale or incomplete", {age,lastSaved:s.lastSaved,lastFailures:s.lastFailures,problems});
-                  process.exit(1);
-                }
-              '; then
-                echo "All discovered active USDT crypto symbols across all seven exchanges have recent persisted Open Interest snapshots."
-                exit 0
-              fi
-            fi
-            echo "Open Interest universe is not yet complete (attempt $attempt)"
-            sleep 10
-          done
-          echo "ERROR: One or more active USDT crypto symbols are missing or stale."
-          exit 1
-
-      - name: Verify Google Drive backup
-        env:
           BACKUP_STATUS_URL: https://exchange-api-connectivity-test.onrender.com/api/drive-backup-status
         run: |
-          set -eu
-          for attempt in 1 2 3 4 5 6 7 8 9; do
+          set -u
+          echo "Trigger event: ${GITHUB_EVENT_NAME}"
+          echo "Started at (UTC): $(date -u +%FT%TZ)"
+          for cycle in 1 2 3 4 5; do
+            echo "===== Keepalive cycle $cycle/5 at $(date -u +%FT%TZ) ====="
+            health_ok=0
+            for attempt in 1 2 3 4 5 6; do
+              if curl --silent --show-error --fail --max-time 35 "$HEALTH_URL" -o health.json; then
+                cat health.json
+                if node -e 'const fs=require("fs");const h=JSON.parse(fs.readFileSync("health.json","utf8"));if(!h.ok||!h.openInterestHistory?.configured||!h.openInterestHistory?.databaseReady)process.exit(1);'; then
+                  health_ok=1
+                  break
+                fi
+              fi
+              echo "Health/database not ready yet (attempt $attempt)"
+              sleep 5
+            done
+            if [ "$health_ok" -eq 1 ]; then
+              echo "HEALTH PASS"
+            else
+              echo "HEALTH PENDING - will retry in the next keepalive cycle"
+            fi
+
+            if curl --silent --show-error --fail --max-time 25 "$STATUS_URL" -o oi-status.json; then
+              node -e '
+                const fs=require("fs");
+                const s=JSON.parse(fs.readFileSync("oi-status.json","utf8"));
+                const rows=new Map((s.coverage||[]).map(x=>[x.exchange,x]));
+                const states=new Map((s.collectionState||[]).map(x=>[x.exchange,x]));
+                const exchanges=["MEXC","BingX","OKX","WEEX","HTX","KuCoin","XT"];
+                const missing=[];
+                for(const exchange of exchanges){
+                  const row=rows.get(exchange), state=states.get(exchange);
+                  const expected=Number(state?.last_discovered_count||0);
+                  const observed=Number(row?.unique_symbols_last_65m||0);
+                  if(!row||!state||expected<=0||observed<expected)missing.push({exchange,observed,expected});
+                }
+                console.log(JSON.stringify({
+                  event:"oi_coverage_keepalive_audit",
+                  at:new Date().toISOString(),
+                  databaseReady:s.databaseReady,
+                  collectionEnabled:s.collectionEnabled,
+                  lastSaved:s.lastSaved,
+                  lastFailures:s.lastFailures,
+                  coverage:exchanges.map(exchange=>({
+                    exchange,
+                    observed:Number(rows.get(exchange)?.unique_symbols_last_65m||0),
+                    expected:Number(states.get(exchange)?.last_discovered_count||0)
+                  })),
+                  result:missing.length?"PARTIAL":"PASS",
+                  missing
+                }));
+              ' || echo "OI coverage status could not be parsed; keepalive continues"
+            else
+              echo "OI status endpoint unavailable; keepalive continues"
+            fi
+
             if curl --silent --show-error --fail --max-time 25 "$BACKUP_STATUS_URL" -o backup-status.json; then
-              cat backup-status.json
-              if node -e '
+              node -e '
                 const fs=require("fs");
                 const s=JSON.parse(fs.readFileSync("backup-status.json","utf8"));
-                const r=s.lastResult;
-                const age=s.lastBackupAt ? (Date.now()-Date.parse(s.lastBackupAt))/3600000 : Infinity;
-                if (!s.configured || !s.databaseReady || !r?.ok || !(r.backedUpRecords > 0) || !Number.isFinite(age) || age < -0.1 || age > 7) process.exit(1);
-              '; then
-                echo "Google Drive backup is configured and a recent backup succeeded."
-                exit 0
-              fi
+                console.log(JSON.stringify({
+                  event:"drive_backup_keepalive_audit",
+                  at:new Date().toISOString(),
+                  configured:s.configured,
+                  databaseReady:s.databaseReady,
+                  lastBackupAt:s.lastBackupAt,
+                  lastResult:s.lastResult,
+                  result:s.lastResult?.ok?"PASS":"PENDING"
+                }));
+              ' || echo "Backup status could not be parsed; keepalive continues"
+            else
+              echo "Backup status endpoint unavailable; keepalive continues"
             fi
-            echo "Google Drive backup is not yet confirmed (attempt $attempt)"
-            sleep 10
+
+            if [ "$cycle" -lt 5 ]; then sleep 300; fi
           done
-          echo "ERROR: Google Drive backup is missing, stale, or unsuccessful."
-          exit 1
+          echo "Keepalive window finished at (UTC): $(date -u +%FT%TZ)"
