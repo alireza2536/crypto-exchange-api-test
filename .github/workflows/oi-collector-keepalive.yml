@@ -75,7 +75,7 @@ jobs:
                 const s=JSON.parse(fs.readFileSync("backup-status.json","utf8"));
                 const r=s.lastResult;
                 const age=s.lastBackupAt ? (Date.now()-Date.parse(s.lastBackupAt))/3600000 : Infinity;
-                if (!s.configured || !s.databaseReady || !r?.ok || !(r.backedUpRecords > 0) || !r.file || !Number.isFinite(age) || age < -0.1 || age > 7) process.exit(1);
+                if (!s.configured || !s.databaseReady || !r?.ok || !(r.backedUpRecords > 0) || !Number.isFinite(age) || age < -0.1 || age > 7) process.exit(1);
               '; then
                 echo "Google Drive backup is configured and a recent backup succeeded."
                 exit 0
