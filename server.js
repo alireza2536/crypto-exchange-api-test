@@ -699,7 +699,7 @@ async function getOiSnapshotStatus() {
     try {
       const [recentResult, coverageResult, collectionStateResult] = await Promise.all([
         oiSnapshotPool.query("SELECT COUNT(*)::int AS recent_saved, MAX(collected_at) AS recent_last_run_at FROM oi_snapshots WHERE collected_at >= NOW() - INTERVAL '15 minutes'"),
-        oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, MAX(collected_at) AS last_collected_at, COUNT(*) FILTER (WHERE collected_at >= NOW() - INTERVAL '15 minutes')::int AS snapshots_last_15m, COUNT(DISTINCT symbol) FILTER (WHERE collected_at >= NOW() - INTERVAL '65 minutes')::int AS unique_symbols_last_65m FROM oi_snapshots GROUP BY exchange ORDER BY exchange"),
+        oiSnapshotPool.query("SELECT exchange, COUNT(*)::int AS snapshots, COUNT(DISTINCT symbol)::int AS unique_symbols_total, MAX(collected_at) AS last_collected_at, COUNT(*) FILTER (WHERE collected_at >= NOW() - INTERVAL '15 minutes')::int AS snapshots_last_15m, COUNT(DISTINCT symbol) FILTER (WHERE collected_at >= NOW() - INTERVAL '65 minutes')::int AS unique_symbols_last_65m FROM oi_snapshots GROUP BY exchange ORDER BY exchange"),
         oiSnapshotPool.query("SELECT exchange, cursor_index, last_collection_at, last_bulk_collection_at, last_discovered_count FROM oi_collection_state ORDER BY exchange")
       ]);
       const recent = recentResult.rows[0] || {};
