@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Ping health endpoint
+      - name: Ping Render health endpoint
         env:
-          HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health
+          HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health?source=github-actions
         run: |
           curl --fail --silent --show-error \
             --connect-timeout 20 \
