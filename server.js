@@ -151,6 +151,21 @@ function isExplicitTradFiContract(row) {
     /(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(value)
   );
 }
+function hasHtxOfficialTradFiLabel(row) {
+  const labels = [
+    ...(Array.isArray(row?.labels) ? row.labels : []),
+    ...(Array.isArray(row?.tradfi_labels) ? row.tradfi_labels : [])
+  ].map(value => String(value ?? "").trim().toLowerCase().replace(/[\\s_-]+/g, ""));
+  return labels.some(value =>
+    /^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy|etf|preipo)$/.test(value)
+  );
+}
+function isHtxTradFiContract(row) {
+  // HTX now supplies an official tradfi_labels array on its linear-swap catalog.
+  // Fail closed if that classification field disappears or is missing.
+  if (!Array.isArray(row?.tradfi_labels)) return true;
+  return hasHtxOfficialTradFiLabel(row) || isExplicitTradFiContract(row);
+}
 function isBingXTradFiSymbol(symbol) {
   // BingX's public USDT-M catalog includes tagged TradFi instrument families:
   // NCS* (equities/indices), NCCO* (commodities), and NCF* (FX).
@@ -276,15 +291,34 @@ async function collectExchangeOi(exchange, options = {}) {
     } else if (exchange === "HTX") {
       const j = await fetchPublicJson(source);
       if (j?.status !== "ok" || !Array.isArray(j.data)) throw new Error("HTX contract-list schema/status check failed");
-      // HTX's public swap catalog currently exposes no reliable crypto-vs-TradFi flag.
-      // Do not use the spot catalog as a hard whitelist: valid crypto perpetuals may lack an active spot pair.
-      // Exclude only contracts whose own official metadata explicitly identifies TradFi.
-      symbols = [...new Set(j.data.filter(row => {
+      const activeUsdtRows = j.data.filter(row => {
         const symbol = row?.contract_code;
         const quote = String(row?.settle_currency ?? row?.quote_currency ?? "");
         const active = Number(row?.contract_status) === 1;
-        return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active && !isExplicitTradFiContract(row);
-      }).map(row => row.contract_code))];
+        return usdtSymbol(exchange, symbol) && (!quote || quote.toUpperCase() === "USDT") && active;
+      });
+      const missingOfficialLabels = activeUsdtRows.filter(row => !Array.isArray(row?.tradfi_labels)).length;
+      const excludedByOfficialLabels = activeUsdtRows.filter(row => hasHtxOfficialTradFiLabel(row)).length;
+      const excludedByFallbackMetadata = activeUsdtRows.filter(row =>
+        Array.isArray(row?.tradfi_labels) && !hasHtxOfficialTradFiLabel(row) && isExplicitTradFiContract(row)
+      ).length;
+      // HTX's own tradfi_labels/labels identify stocks, commodities, indices and FX.
+      // Fail closed when the official classification field is absent.
+      symbols = [...new Set(activeUsdtRows.filter(row =>
+        Array.isArray(row?.tradfi_labels) &&
+        !hasHtxOfficialTradFiLabel(row) &&
+        !isExplicitTradFiContract(row)
+      ).map(row => row.contract_code))];
+      console.log(JSON.stringify({
+        event: "htx_contract_classification",
+        totalContractRows: j.data.length,
+        activeUsdtCandidates: activeUsdtRows.length,
+        rowsWithOfficialTradfiLabels: activeUsdtRows.length - missingOfficialLabels,
+        excludedByOfficialLabels,
+        excludedByFallbackMetadata,
+        missingOfficialLabels,
+        discoveredCryptoSymbols: symbols.length
+      }));
     } else if (exchange === "XT") {
       const [j, plateCatalog] = await Promise.all([
         fetchPublicJson(source),
