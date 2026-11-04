@@ -160,12 +160,6 @@ function hasHtxOfficialTradFiLabel(row) {
     /^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy|etf|preipo)$/.test(value)
   );
 }
-function isHtxTradFiContract(row) {
-  // HTX now supplies an official tradfi_labels array on its linear-swap catalog.
-  // Fail closed if that classification field disappears or is missing.
-  if (!Array.isArray(row?.tradfi_labels)) return true;
-  return hasHtxOfficialTradFiLabel(row) || isExplicitTradFiContract(row);
-}
 function isBingXTradFiSymbol(symbol) {
   // BingX's public USDT-M catalog includes tagged TradFi instrument families:
   // NCS* (equities/indices), NCCO* (commodities), and NCF* (FX).
