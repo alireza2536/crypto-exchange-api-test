@@ -5,15 +5,27 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
+concurrency:
+  group: render-test-service-keepalive
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
   keep-awake:
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 5
     steps:
       - name: Ping health endpoint
+        env:
+          HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health
         run: |
-          curl --fail --silent --show-error --max-time 30 \
-            "https://exchange-api-connectivity-test.onrender.com/health"
+          curl --fail --silent --show-error \
+            --connect-timeout 20 \
+            --max-time 90 \
+            --retry 2 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            "$HEALTH_URL" >/dev/null
+          echo "Render health endpoint responded successfully."
