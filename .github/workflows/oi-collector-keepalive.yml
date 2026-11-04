@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Wake service and check health
         env:
-          HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health
+          HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health?source=github-actions
         run: |
           set -eu
           echo "Trigger event: ${GITHUB_EVENT_NAME}"
