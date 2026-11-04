@@ -1661,6 +1661,13 @@ server.listen(PORT, "0.0.0.0", () => {
   } else {
     console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready: false, reason: "DATABASE_URL not configured" }));
   }
+  // Run the 1h EMA2000 depth probe independently so other long diagnostic sweeps cannot delay it.
+  fetch(`http://127.0.0.1:${PORT}/api/history-depth-1h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) })
+    .then(async response => {
+      const body = await response.json();
+      console.log(JSON.stringify({ event: "startup_history_depth_1h_probe", httpStatus: response.status, ...body }));
+    })
+    .catch(error => console.error("1h history depth probe failed:", error?.message || String(error)));
   // Run one diagnostic sweep after each deploy/restart so results are available in Render logs.
   Promise.all(probes.map(runProbe)).then(async (results) => {
     const passed = results.filter((item) => item.status === "PASS").length;
@@ -1715,9 +1722,7 @@ server.listen(PORT, "0.0.0.0", () => {
     const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
     const historyBody = await historyResponse.json();
     console.log(JSON.stringify({ event: "startup_history_depth_probe", httpStatus: historyResponse.status, ...historyBody }));
-    const history1hResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-1h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) });
-    const history1hBody = await history1hResponse.json();
-    console.log(JSON.stringify({ event: "startup_history_depth_1h_probe", httpStatus: history1hResponse.status, ...history1hBody }));
+
     await htxAuditPromise;
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
