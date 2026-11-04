@@ -1678,13 +1678,13 @@ const server = http.createServer(async (req, res) => {
     // Paginated 4h history validation. Each exchange has its own documented cursor/limit behavior.
     const targetCandles = 60, intervalMs = 24 * 60 * 60 * 1000, maxPages = 10;
     const specs = [
-      { exchange:"MEXC", pageLimit:2000, url:()=> "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Hour4", rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(d.open?.[i]),h:Number(d.high?.[i]),l:Number(d.low?.[i]),c:Number(d.close?.[i])}));} },
+      { exchange:"MEXC", pageLimit:2000, url:()=> "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Day1", rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(d.open?.[i]),h:Number(d.high?.[i]),l:Number(d.low?.[i]),c:Number(d.close?.[i])}));} },
       { exchange:"BingX", pageLimit:1000, url:(cursor)=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=1d&limit=1000"+(cursor?("&startTime="+(cursor-999*intervalMs)+"&endTime="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.time),o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close)})) },
       { exchange:"OKX", pageLimit:300, url:(cursor)=>"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1D&limit=300"+(cursor?("&after="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])})) },
       { exchange:"WEEX", pageLimit:100, url:(cursor)=>"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=1d&limit=100"+(cursor?("&startTime="+(cursor-99*intervalMs)+"&endTime="+cursor):""), rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])})) },
       { exchange:"HTX", pageLimit:2000, url:()=> "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=1day&size=100", rows:j=>(j?.data||[]).map(x=>({t:Number(x?.id)*1000,o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close)})) },
       { exchange:"KuCoin", pageLimit:200, url:(cursor)=>"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=1440"+(cursor?("&to="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])})) },
-      { exchange:"XT", pageLimit:1200, url:()=> "https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1d&limit=1200", rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),o:Number(x?.o),h:Number(x?.h),l:Number(x?.l),c:Number(x?.c)})) }
+      { exchange:"XT", pageLimit:1200, url:()=> "https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1d&limit=1000", rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),o:Number(x?.o),h:Number(x?.h),l:Number(x?.l),c:Number(x?.c)})) }
     ];
     const results = await Promise.all(specs.map(async spec => {
       const started=Date.now(), allRows=[], pageReports=[];
@@ -1737,7 +1737,7 @@ const server = http.createServer(async (req, res) => {
     const passed=results.filter(x=>x.status==="RESPONSE_OK").length;
     const ready=results.filter(x=>x.historyReady).length;
     res.writeHead(200,{"content-type":"application/json; charset=utf-8","cache-control":"no-store"});
-    return res.end(JSON.stringify({finishedAt:new Date().toISOString(),purpose:"Paginated 4h history test for EMA50; historyReady requires 60 unique daily candles, zero daily gaps, and a fresh latest candle.",passed,total:results.length,historyReadyCount:ready,results,warning:"This validates BTC-USDT daily history only; it does not by itself confirm every symbol or production integration."}));
+    return res.end(JSON.stringify({finishedAt:new Date().toISOString(),purpose:"Paginated 1d history test for EMA20/EMA50; historyReady requires 60 unique daily candles, zero daily gaps, and a fresh latest candle.",passed,total:results.length,historyReadyCount:ready,results,warning:"This validates BTC-USDT daily history only; it does not by itself confirm every symbol or production integration."}));
   }
   if (url.pathname === "/api/data-test") {
     const results = await Promise.all(dataProbes.map(runDataProbe));
