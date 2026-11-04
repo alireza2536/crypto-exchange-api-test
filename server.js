@@ -14,7 +14,7 @@ let oiDriveBackupRunning = false;
 const OI_ARCHIVE_BATCH_SIZE = 500;
 const OI_ARCHIVE_MAX_BATCHES_PER_RUN = 30;
 const OI_RETENTION_DAYS = 7;
-const OI_ROTATING_BATCH_SIZE = 15;
+const OI_ROTATING_BATCH_SIZE = Math.min(100, Math.max(1, Number(process.env.OI_ROTATING_BATCH_SIZE) || 15));
 const OI_BULK_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const OI_ARCHIVE_PRUNE_ENABLED = process.env.OI_ARCHIVE_PRUNE_ENABLED === "true";
 const oiDatabaseConnectionString = process.env.DATABASE_URL
