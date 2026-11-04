@@ -1520,7 +1520,7 @@ const server = http.createServer(async (req, res) => {
             }finally{clearTimeout(timer)}
             try{json=JSON.parse(lastRaw)}catch{json=null}
             const apiCode=Number(json?.code??json?.returnCode);
-            const transient=!response.ok&&[429,500,502,503,504].includes(response.status)||[100410,100429].includes(apiCode);
+            const transient=(!response.ok&&[429,500,502,503,504].includes(response.status))||[100410,100429].includes(apiCode)||(spec.exchange==="MEXC"&&apiCode===510);
             if(attempt<2&&transient){await sleep(1000*(attempt+1));continue}
             break;
           }
@@ -1577,7 +1577,7 @@ const server = http.createServer(async (req, res) => {
             }finally{clearTimeout(timer)}
             try{json=JSON.parse(lastRaw)}catch{json=null}
             const apiCode=Number(json?.code??json?.returnCode);
-            const transient=!response.ok&&[429,500,502,503,504].includes(response.status)||[100410,100429].includes(apiCode);
+            const transient=(!response.ok&&[429,500,502,503,504].includes(response.status))||[100410,100429].includes(apiCode)||(spec.exchange==="MEXC"&&apiCode===510);
             if(attempt<2&&transient){await sleep(1000*(attempt+1));continue}
             break;
           }
@@ -1720,20 +1720,23 @@ server.listen(PORT, "0.0.0.0", () => {
   } else {
     console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready: false, reason: "DATABASE_URL not configured" }));
   }
-  // Run the 1h EMA2000 depth probe independently so other long diagnostic sweeps cannot delay it.
-  fetch(`http://127.0.0.1:${PORT}/api/history-depth-1h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) })
-    .then(async response => {
+  // Run depth probes sequentially to avoid simultaneous MEXC history requests triggering public API rate limits.
+  (async () => {
+    try {
+      const response = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-1h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) });
       const body = await response.json();
       console.log(JSON.stringify({ event: "startup_history_depth_1h_probe", httpStatus: response.status, ...body }));
-    })
-    .catch(error => console.error("1h history depth probe failed:", error?.message || String(error)));
-  // Test native 2h history separately; do not infer EMA2000 readiness from 1h or 4h data.
-  fetch(`http://127.0.0.1:${PORT}/api/history-depth-2h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) })
-    .then(async response => {
+    } catch (error) {
+      console.error("1h history depth probe failed:", error?.message || String(error));
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-2h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) });
       const body = await response.json();
       console.log(JSON.stringify({ event: "startup_history_depth_2h_probe", httpStatus: response.status, ...body }));
-    })
-    .catch(error => console.error("2h history depth probe failed:", error?.message || String(error)));
+    } catch (error) {
+      console.error("2h history depth probe failed:", error?.message || String(error));
+    }
+  })();
   // Run one diagnostic sweep after each deploy/restart so results are available in Render logs.
   Promise.all(probes.map(runProbe)).then(async (results) => {
     const passed = results.filter((item) => item.status === "PASS").length;
