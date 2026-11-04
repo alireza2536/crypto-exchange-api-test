@@ -38,7 +38,7 @@ jobs:
             sleep 5
           done
 
-      - name: Verify full seven-exchange Open Interest freshness
+      - name: Verify full seven-exchange Open Interest universe
         env:
           STATUS_URL: https://exchange-api-connectivity-test.onrender.com/api/open-interest-status
         run: |
@@ -50,28 +50,37 @@ jobs:
                 const fs=require("fs");
                 const s=JSON.parse(fs.readFileSync("oi-status.json","utf8"));
                 const age=s.lastRunAt ? (Date.now()-Date.parse(s.lastRunAt))/60000 : Infinity;
-                const required={MEXC:35,BingX:15,OKX:35,WEEX:15,HTX:15,KuCoin:35,XT:15};
+                const maxAge={MEXC:35,BingX:15,OKX:35,WEEX:15,HTX:15,KuCoin:35,XT:15};
                 const rows=new Map((s.coverage||[]).map(x=>[x.exchange,x]));
-                const stale=[];
-                for (const [exchange,maxAge] of Object.entries(required)) {
+                const states=new Map((s.collectionState||[]).map(x=>[x.exchange,x]));
+                const problems=[];
+                for (const [exchange,maxMinutes] of Object.entries(maxAge)) {
                   const row=rows.get(exchange);
+                  const state=states.get(exchange);
                   const t=row?.last_collected_at ? Date.parse(row.last_collected_at) : NaN;
                   const exchangeAge=(Date.now()-t)/60000;
-                  if (!row || !Number.isFinite(exchangeAge) || exchangeAge < -2 || exchangeAge > maxAge || !(row.snapshots > 0)) stale.push({exchange,exchangeAge,maxAge});
+                  const expected=Number(state?.last_discovered_count||0);
+                  const observed=Number(row?.unique_symbols_last_65m||0);
+                  if (!row || !state || !Number.isFinite(exchangeAge) || exchangeAge < -2 || exchangeAge > maxMinutes ||
+                      !(row.snapshots > 0) || expected <= 0 || observed < expected) {
+                    problems.push({exchange,exchangeAge,maxMinutes,observed,expected});
+                  }
                 }
-                if (!s.configured || !s.databaseReady || s.collectionEnabled !== true || !Number.isFinite(age) || age < -2 || age > 15 || !(s.lastSaved > 0) || (s.lastFailures||[]).length || stale.length) {
-                  console.error("Open Interest coverage is stale or incomplete", {age,lastSaved:s.lastSaved,lastFailures:s.lastFailures,stale});
+                if (!s.configured || !s.databaseReady || s.collectionEnabled !== true ||
+                    !Number.isFinite(age) || age < -2 || age > 15 || !(s.lastSaved > 0) ||
+                    (s.lastFailures||[]).length || problems.length) {
+                  console.error("Open Interest universe is stale or incomplete", {age,lastSaved:s.lastSaved,lastFailures:s.lastFailures,problems});
                   process.exit(1);
                 }
               '; then
-                echo "All seven exchanges have fresh, persisted Open Interest snapshots."
+                echo "All discovered active USDT crypto symbols across all seven exchanges have recent persisted Open Interest snapshots."
                 exit 0
               fi
             fi
-            echo "Open Interest coverage is not yet fresh/complete (attempt $attempt)"
+            echo "Open Interest universe is not yet complete (attempt $attempt)"
             sleep 10
           done
-          echo "ERROR: One or more exchange Open Interest feeds are stale or missing."
+          echo "ERROR: One or more active USDT crypto symbols are missing or stale."
           exit 1
 
       - name: Verify Google Drive backup
