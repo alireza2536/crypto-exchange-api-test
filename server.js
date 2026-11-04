@@ -1777,6 +1777,20 @@ server.listen(PORT, "0.0.0.0", () => {
           console.log(JSON.stringify({ event: "open_interest_collection_paused", reason: "OI_FULL_UNIVERSE_COLLECTION_ENABLED is not true; preserving existing history while storage/archive policy is confirmed" }));
         }
         await backupOpenInterestToGoogleDrive();
+        try {
+          const oiStatusResponse = await fetch(`http://127.0.0.1:${PORT}/api/open-interest-status`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
+          const oiStatus = await oiStatusResponse.json();
+          console.log(JSON.stringify({ event: "open_interest_status_audit", httpStatus: oiStatusResponse.status, ...oiStatus }));
+        } catch (error) {
+          console.error("Open Interest status audit failed:", error?.message || String(error));
+        }
+        try {
+          const backupStatusResponse = await fetch(`http://127.0.0.1:${PORT}/api/drive-backup-status`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
+          const backupStatus = await backupStatusResponse.json();
+          console.log(JSON.stringify({ event: "drive_backup_status_audit", httpStatus: backupStatusResponse.status, ...backupStatus }));
+        } catch (error) {
+          console.error("Drive backup status audit failed:", error?.message || String(error));
+        }
         // Check every 10 minutes so a transient Drive timeout is retried promptly.
         // A new full backup is only sent after the configured 6-hour interval, unless the previous attempt failed.
         setInterval(maybeBackupOpenInterestToGoogleDrive, 10 * 60 * 1000).unref();
