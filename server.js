@@ -1715,6 +1715,9 @@ server.listen(PORT, "0.0.0.0", () => {
     const historyResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
     const historyBody = await historyResponse.json();
     console.log(JSON.stringify({ event: "startup_history_depth_probe", httpStatus: historyResponse.status, ...historyBody }));
+    const history1hResponse = await fetch(`http://127.0.0.1:${PORT}/api/history-depth-1h-test`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(180000) });
+    const history1hBody = await history1hResponse.json();
+    console.log(JSON.stringify({ event: "startup_history_depth_1h_probe", httpStatus: history1hResponse.status, ...history1hBody }));
     await htxAuditPromise;
   }).catch((error) => {
     console.error("Startup exchange probe failed:", error?.message || String(error));
