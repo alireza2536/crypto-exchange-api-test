@@ -1373,7 +1373,10 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   res.setHeader("access-control-allow-origin", "*");
   if (url.pathname === "/health") {
-    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    if (url.searchParams.get("source") === "github-actions") {
+      console.log(JSON.stringify({ event: "render_keepalive_ping", source: "github-actions", at: new Date().toISOString() }));
+    }
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     return res.end(JSON.stringify({ ok: true, service: "exchange-api-connectivity-test", openInterestHistory: { configured: Boolean(oiSnapshotPool), databaseReady: oiSnapshotDbReady, collectorIntervalMinutes: OI_SNAPSHOT_INTERVAL_MS / 60000, note: oiSnapshotPool ? (oiSnapshotDbReady ? "Persistent snapshots enabled" : "Database configured but not ready") : "DATABASE_URL is not configured; historical snapshots are disabled" } }));
   }
 
