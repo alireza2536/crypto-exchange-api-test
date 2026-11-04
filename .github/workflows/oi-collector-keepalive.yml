@@ -14,7 +14,7 @@ permissions:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 28
+    timeout-minutes: 29
     steps:
       - name: Keep Render awake and audit seven-exchange coverage
         env:
@@ -25,8 +25,8 @@ jobs:
           set -u
           echo "Trigger event: ${GITHUB_EVENT_NAME}"
           echo "Started at (UTC): $(date -u +%FT%TZ)"
-          for cycle in 1 2 3 4 5; do
-            echo "===== Keepalive cycle $cycle/5 at $(date -u +%FT%TZ) ====="
+          for cycle in 1 2 3 4 5 6; do
+            echo "===== Keepalive cycle $cycle/6 at $(date -u +%FT%TZ) ====="
             health_ok=0
             for attempt in 1 2 3 4 5 6; do
               if curl --silent --show-error --fail --max-time 35 "$HEALTH_URL" -o health.json; then
@@ -97,6 +97,6 @@ jobs:
               echo "Backup status endpoint unavailable; keepalive continues"
             fi
 
-            if [ "$cycle" -lt 5 ]; then sleep 300; fi
+            if [ "$cycle" -lt 6 ]; then sleep 300; fi
           done
           echo "Keepalive window finished at (UTC): $(date -u +%FT%TZ)"
