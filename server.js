@@ -1500,11 +1500,11 @@ const server = http.createServer(async (req, res) => {
     const specs = [
       { exchange:"MEXC", pageLimit:2000, url:()=> "https://api.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min60", rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,c:Number(d.close?.[i])}));} },
       { exchange:"BingX", pageLimit:1000, url:cursor=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=1h&limit=1000"+(cursor?("&startTime="+(cursor-999*intervalMs)+"&endTime="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.time),c:Number(x?.close)})) },
-      { exchange:"OKX", pageLimit:300, url:cursor=>"https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=1H&limit=300"+(cursor?("&after="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
+      { exchange:"OKX", pageLimit:300, url:cursor=>"https://www.okx.com/api/v5/market/history-candles?instId=BTC-USDT-SWAP&bar=1H&limit=300"+(cursor?("&after="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
       { exchange:"WEEX", pageLimit:100, url:cursor=>"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=1h&limit=100"+(cursor?("&startTime="+(cursor-99*intervalMs)+"&endTime="+cursor):""), rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),c:Number(x?.[4])})) },
       { exchange:"HTX", pageLimit:2000, url:()=> "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=60min&size=2000", rows:j=>(j?.data||[]).map(x=>({t:Number(x?.id)*1000,c:Number(x?.close)})) },
       { exchange:"KuCoin", pageLimit:200, url:cursor=>"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=60"+(cursor?("&to="+cursor):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,c:Number(x?.[4])})) },
-      { exchange:"XT", pageLimit:2000, url:()=> "https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1h&limit=2000", rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),c:Number(x?.c)})) }
+      { exchange:"XT", pageLimit:1000, url:cursor=>"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=1h&limit=1000"+(cursor?("&startTime="+(cursor-999*intervalMs)+"&endTime="+cursor):""), rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x?.t),c:Number(x?.c)})) }
     ];
     const results = await Promise.all(specs.map(async spec => {
       const started=Date.now(), allRows=[], pageReports=[];
@@ -1533,7 +1533,7 @@ const server = http.createServer(async (req, res) => {
           const oldest=parsed.length?Math.min(...parsed.map(x=>x.t)):null;
           pageReports.push({page:page+1,rows:parsed.length,uniqueTotal:uniqueNow.length,oldestAt:oldest?new Date(oldest).toISOString():null});
           if(uniqueNow.length>=targetCandles||parsed.length===0||oldest===null)break;
-          if(["MEXC","HTX","XT"].includes(spec.exchange))break;
+          if(["MEXC","HTX"].includes(spec.exchange))break;
           const nextCursor=oldest-1;
           if(cursor!==null&&nextCursor>=cursor){lastError="Pagination cursor did not move backward";break}
           cursor=nextCursor;
