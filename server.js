@@ -1570,7 +1570,7 @@ const server = http.createServer(async (req, res) => {
     }));
     const passed=results.filter(x=>x.status==="RESPONSE_OK").length,ready=results.filter(x=>x.historyReady).length;
     res.writeHead(200,{"content-type":"application/json; charset=utf-8","cache-control":"no-store"});
-    return res.end(JSON.stringify({finishedAt:new Date().toISOString(),timeframe:"15m",purpose:"Paginated BTC-USDT 15m history validation for CCI(1200); readiness requires 1,200 unique candles, zero 15m gaps, a fresh latest candle and a finite CCI(1200) calculation.",passed,total:results.length,historyReadyCount:ready,results,warning:"BTC-USDT benchmark only; this does not establish 1h history for every listed USDT perpetual symbol."}));
+    return res.end(JSON.stringify({finishedAt:new Date().toISOString(),timeframe:"15m",purpose:"Paginated BTC-USDT 15m history validation for CCI(1200); readiness requires 1,200 unique candles, zero 15m gaps, a fresh latest candle and a finite CCI(1200) calculation.",passed,total:results.length,historyReadyCount:ready,results,warning:"BTC-USDT benchmark only; this does not establish 15m history for every listed USDT perpetual symbol."}));
   }
 
   if (url.pathname === "/api/history-depth-1h-test") {
