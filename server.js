@@ -1,5 +1,6 @@
 import http from "node:http";
 import pg from "pg";
+import { baseSymbolFromContract, initialEntryDecision, newInitialFilterCounts, recordInitialFilterDecision } from "./scripts/initial-entry-filter.js";
 const { Pool } = pg;
 
 const PORT = Number(process.env.PORT || 3000);
@@ -182,56 +183,6 @@ function toSnapshot(exchange, symbol, value, sourceEndpoint) {
   return oi === null ? null : { exchange, symbol, metric: "open_interest_native", value: oi, source_endpoint: sourceEndpoint };
 }
 
-
-const USD_STABLECOIN_BASES = new Set([
-  "USDT", "USDC", "USDE", "USDS", "USDD", "USDP", "DAI", "USD1", "USDG",
-  "PYUSD", "RLUSD", "FDUSD", "TUSD", "GUSD", "GHO", "USDF", "USDT0",
-  "BUSD", "UST", "USTC", "FRAX", "CRVUSD", "MIM", "LUSD", "SUSD",
-  "DOLA", "ALUSD", "FEI", "EUSD", "USDK", "USDJ", "USN", "USDX",
-  "USD0", "USDB", "USDA", "USDH", "USDL", "USDQ", "USDZ", "USX",
-  "USDC.E", "USDT.E", "USDCN", "USDTB", "USDR", "USDT+", "USDC+", "USDCV"
-]);
-
-function baseSymbolFromContract(exchange, symbol) {
-  const value = String(symbol ?? "").trim().toUpperCase();
-  let base = value;
-  if (exchange === "MEXC" || exchange === "XT") base = value.split("_")[0];
-  else if (exchange === "BingX" || exchange === "OKX" || exchange === "HTX") base = value.split("-")[0];
-  else if (exchange === "WEEX") base = value.replace(/USDT$/, "");
-  else if (exchange === "KuCoin") base = value.replace(/USDTM$/, "");
-  for (const multiplier of ["1000000", "100000", "10000", "1000"]) {
-    if (base.startsWith(multiplier) && base.length > multiplier.length) {
-      base = base.slice(multiplier.length);
-      break;
-    }
-  }
-  return base;
-}
-
-function initialEntryDecision(exchange, symbol, price) {
-  const base = baseSymbolFromContract(exchange, symbol);
-  if (USD_STABLECOIN_BASES.has(base)) {
-    return { allowed: false, reason: "USD_STABLECOIN", price: null };
-  }
-  const last = Number(price);
-  if (!Number.isFinite(last) || last <= 0) {
-    return { allowed: false, reason: "PRICE_UNAVAILABLE", price: null };
-  }
-  if (last > 30) {
-    return { allowed: false, reason: "PRICE_ABOVE_30_USDT", price: last };
-  }
-  return { allowed: true, reason: "ALLOWED", price: last };
-}
-
-function newInitialFilterCounts() {
-  return { candidates: 0, allowed: 0, USD_STABLECOIN: 0, PRICE_ABOVE_30_USDT: 0, PRICE_UNAVAILABLE: 0 };
-}
-
-function recordInitialFilterDecision(counts, decision) {
-  counts.candidates += 1;
-  if (decision.allowed) counts.allowed += 1;
-  else counts[decision.reason] += 1;
-}
 
 async function fetchBulkOiPriceMap(exchange) {
   if (exchange === "BingX") {
