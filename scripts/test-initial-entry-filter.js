@@ -19,7 +19,8 @@ test("known USD-pegged stablecoins are rejected before price checks", () => {
   for (const [exchange, symbol] of [
     ["MEXC", "USDT_USDT"], ["BingX", "USDC-USDT"], ["OKX", "DAI-USDT-SWAP"],
     ["WEEX", "USDEUSDT"], ["HTX", "USDD-USDT"], ["KuCoin", "USDPUSDTM"],
-    ["XT", "1000USDT_USDT"]
+    ["XT", "1000USDT_USDT"], ["MEXC", "AUSD_USDT"], ["OKX", "USDY-USDT-SWAP"],
+    ["KuCoin", "USYCUSDTM"]
   ]) {
     assert.equal(initialEntryDecision(exchange, symbol, 1).reason, "USD_STABLECOIN");
   }
