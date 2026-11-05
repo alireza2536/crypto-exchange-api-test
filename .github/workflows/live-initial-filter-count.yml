@@ -1,0 +1,25 @@
+name: Live initial filter count audit
+on:
+  push:
+    branches: [live-initial-filter-count-audit]
+    paths:
+      - "scripts/live-initial-filter-count.mjs"
+      - ".github/workflows/live-initial-filter-count.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Count all audited contracts against live prices
+        run: node scripts/live-initial-filter-count.mjs | tee live-initial-filter-count.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-initial-filter-count
+          path: live-initial-filter-count.json
