@@ -1500,6 +1500,38 @@ async function runFullUniverseOhlcAudit() {
     return {startedAt,finishedAt:new Date().toISOString(),purpose:"Full discovered-universe 15m OHLCV audit. PASS requires every catalog symbol, 1,200 unique gap-free fresh candles, positive volume, finite CCI(1200), and VWAP.",targetCandles,exchangeCount:exchanges.length,overallStatus:allPass?"PASS":"NOT_APPROVED",results:exchangeResults,warning:"Full-universe 15m audit uses exchange-specific pagination where supported; HTX uses its documented maximum-size response. PASS still requires complete symbol discovery and every symbol to meet all history, volume, freshness, CCI and VWAP checks."};
 }
 
+function startFullUniverseOhlcJob() {
+  if (fullUniverseAuditJob?.status === "RUNNING") {
+    return { accepted: true, alreadyRunning: true, job: fullUniverseAuditJob };
+  }
+  const jobId = Date.now().toString(36);
+  fullUniverseAuditJob = { jobId, status: "RUNNING", startedAt: new Date().toISOString(), finishedAt: null, result: null, error: null };
+  console.log(JSON.stringify({ event: "full_universe_ohlc_job_started", jobId, startedAt: fullUniverseAuditJob.startedAt }));
+  void (async () => {
+    try {
+      const body = await runFullUniverseOhlcAudit();
+      fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "COMPLETED", finishedAt: new Date().toISOString(), result: body, error: null };
+      console.log(JSON.stringify({
+        event: "full_universe_ohlc_job_finished", jobId, status: fullUniverseAuditJob.status,
+        finishedAt: fullUniverseAuditJob.finishedAt, overallStatus: body?.overallStatus,
+        exchanges: (body?.results || []).map(x => ({
+          exchange: x.exchange, status: x.status, discoveredCount: x.discoveredCount,
+          testedCount: x.testedCount, passCount: x.passCount, partialCount: x.partialCount,
+          failCount: x.failCount, universeComplete: x.universeComplete,
+          issueSamples: (x.symbolResults || []).filter(y => y.status !== "PASS").slice(0, 8).map(y => ({
+            symbol: y.symbol, status: y.status, candles: y.candles, pages: y.pages,
+            gapCount: y.gapCount, error: y.error
+          }))
+        }))
+      }));
+    } catch (error) {
+      fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "FAILED", finishedAt: new Date().toISOString(), error: String(error.message || error) };
+      console.error(JSON.stringify({ event: "full_universe_ohlc_job_failed", jobId, error: fullUniverseAuditJob.error }));
+    }
+  })();
+  return { accepted: true, jobId, status: "RUNNING", statusEndpoint: "/api/full-universe-ohlc-status" };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   res.setHeader("access-control-allow-origin", "*");
@@ -1943,25 +1975,9 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(fullUniverseAuditJob || { status: "NOT_STARTED" }));
   }
   if (url.pathname === "/api/full-universe-ohlc-start" && req.method === "POST") {
-    if (fullUniverseAuditJob?.status === "RUNNING") {
-      res.writeHead(202, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-      return res.end(JSON.stringify({ accepted: true, alreadyRunning: true, job: fullUniverseAuditJob }));
-    }
-    const jobId = Date.now().toString(36);
-    fullUniverseAuditJob = { jobId, status: "RUNNING", startedAt: new Date().toISOString(), finishedAt: null, result: null, error: null };
-    console.log(JSON.stringify({ event: "full_universe_ohlc_job_started", jobId, startedAt: fullUniverseAuditJob.startedAt }));
-    void (async () => {
-      try {
-        const body = await runFullUniverseOhlcAudit();
-        fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "COMPLETED", finishedAt: new Date().toISOString(), result: body, error: null };
-        console.log(JSON.stringify({ event: "full_universe_ohlc_job_finished", jobId, status: fullUniverseAuditJob.status, finishedAt: fullUniverseAuditJob.finishedAt, overallStatus: body?.overallStatus, exchanges: (body?.results || []).map(x => ({ exchange: x.exchange, status: x.status, discoveredCount: x.discoveredCount, testedCount: x.testedCount, passCount: x.passCount, partialCount: x.partialCount, failCount: x.failCount, universeComplete: x.universeComplete, issueSamples: (x.symbolResults || []).filter(y => y.status !== "PASS").slice(0, 8).map(y => ({ symbol: y.symbol, status: y.status, candles: y.candles, pages: y.pages, gapCount: y.gapCount, error: y.error })) })) }));
-      } catch (error) {
-        fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "FAILED", finishedAt: new Date().toISOString(), error: String(error.message || error) };
-        console.error(JSON.stringify({ event: "full_universe_ohlc_job_failed", jobId, error: fullUniverseAuditJob.error }));
-      }
-    })();
+    const started = startFullUniverseOhlcJob();
     res.writeHead(202, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-    return res.end(JSON.stringify({ accepted: true, jobId, status: "RUNNING", statusEndpoint: "/api/full-universe-ohlc-status" }));
+    return res.end(JSON.stringify(started));
   }
 
   if (url.pathname === "/api/full-universe-ohlc-test") {
@@ -1997,12 +2013,14 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Exchange API test service listening on ${PORT}`);
-  // Automatically start the full-universe audit after lightweight startup diagnostics finish.
+  // Start the audit in-process; avoid an HTTP self-request that can fail or time out.
   setTimeout(() => {
-    fetch(`http://127.0.0.1:${PORT}/api/full-universe-ohlc-start`, { method: "POST" })
-      .then(response => response.text())
-      .then(body => console.log(JSON.stringify({ event: "full_universe_ohlc_auto_start_response", body: body.slice(0, 1000) })))
-      .catch(error => console.error("Full-universe audit auto-start failed:", error?.message || String(error)));
+    try {
+      const started = startFullUniverseOhlcJob();
+      console.log(JSON.stringify({ event: "full_universe_ohlc_auto_start_response", jobId: started.jobId || started.job?.jobId || null, alreadyRunning: Boolean(started.alreadyRunning), status: started.status || started.job?.status || null }));
+    } catch (error) {
+      console.error("Full-universe audit auto-start failed:", error?.message || String(error));
+    }
   }, 90000).unref();
   if (oiSnapshotPool) {
     initOiSnapshotDb().then(async ready => {
