@@ -1465,7 +1465,8 @@ async function runFullUniverseOhlcAudit() {
         const unique=[...new Map(rows.map(x=>[x.t,x])).values()].sort((a,b)=>a.t-b.t);
         const gaps=[];for(let i=1;i<unique.length;i++)if(unique[i].t-unique[i-1].t!==intervalMs)gaps.push({from:unique[i-1].t,to:unique[i].t});
         const latest=unique.at(-1)?.t??null;
-        const fresh=latest!==null&&Date.now()-latest<=45*60*1000;
+        const now=Date.now();
+        const fresh=latest!==null&&latest<=now&&now-latest<=45*60*1000;
         const enough=unique.length>=targetCandles;
         const volumeReady=unique.length>0&&unique.every(x=>x.v>0);
         let cci1200=null,vwap=null;
