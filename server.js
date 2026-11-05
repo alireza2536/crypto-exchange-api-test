@@ -1402,31 +1402,45 @@ async function runFullUniverseOhlcAudit() {
       }
       if (discoveryError) return { exchange, status: "BLOCKED", discoveredCount, testedCount: 0, passCount: 0, failCount: 0, partialCount: 0, error: discoveryError, durationMs: Date.now()-exchangeStarted };
       const adapter = {
-        MEXC: { url:s=>"https://api.mexc.com/api/v1/contract/kline/"+encodeURIComponent(s)+"?interval=Min15", rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(d.open?.[i]),h:Number(d.high?.[i]),l:Number(d.low?.[i]),c:Number(d.close?.[i]),v:Number(d.vol?.[i]??d.volume?.[i]??0)}));}, valid:j=>j?.success===true&&(j?.code===0||j?.code==="0") },
-        BingX: { url:s=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol="+encodeURIComponent(s)+"&interval=15m&limit=1000", rows:j=>(j?.data||[]).map(x=>({t:Number(x.time),o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.volume??x.vol??0)})), valid:j=>j?.code===0||j?.code==="0" },
-        OKX: { url:s=>"https://www.okx.com/api/v5/market/history-candles?instId="+encodeURIComponent(s)+"&bar=15m&limit=300", rows:j=>(j?.data||[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5]??0)})), valid:j=>String(j?.code)==="0" },
-        WEEX: { url:s=>"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol="+encodeURIComponent(s)+"&interval=15m&limit=100", rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5]??0)})), valid:j=>Array.isArray(j) },
-        HTX: { url:s=>"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code="+encodeURIComponent(s)+"&period=15min&size=2000", rows:j=>(j?.data||[]).map(x=>({t:Number(x.id)*1000,o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.vol??x.amount??0)})), valid:j=>j?.status==="ok" },
-        "KuCoin": { url:s=>"https://api-futures.kucoin.com/api/v1/kline/query?symbol="+encodeURIComponent(s)+"&granularity=15", rows:j=>(j?.data||[]).map(x=>({t:Number(x[0])>1e12?Number(x[0]):Number(x[0])*1000,o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5]??0)})), valid:j=>String(j?.code)==="200000" },
-        XT: { url:s=>"https://fapi.xt.com/future/market/v1/public/q/kline?symbol="+encodeURIComponent(s)+"&interval=15m&limit=1000", rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x.t),o:Number(x.o),h:Number(x.h),l:Number(x.l),c:Number(x.c),v:Number(x.a??x.v??0)})), valid:j=>j?.returnCode===0 }
+        MEXC: { pageLimit:2000, url:(s,before)=>"https://api.mexc.com/api/v1/contract/kline/"+encodeURIComponent(s)+"?interval=Min15"+(before!==null?"&end="+Math.floor(before/1000):""), rows:j=>{const d=j?.data||{};return (d.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(d.open?.[i]),h:Number(d.high?.[i]),l:Number(d.low?.[i]),c:Number(d.close?.[i]),v:Number(d.vol?.[i]??d.volume?.[i]??0)}));}, valid:j=>j?.success===true&&(j?.code===0||j?.code==="0") },
+        BingX: { pageLimit:1000, url:(s,before)=>"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol="+encodeURIComponent(s)+"&interval=15m&limit=1000"+(before!==null?("&startTime="+(before-1000*intervalMs)+"&endTime="+(before-1)):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x.time),o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.volume??x.vol??0)})), valid:j=>j?.code===0||j?.code==="0" },
+        OKX: { pageLimit:300, url:(s,before)=>"https://www.okx.com/api/v5/market/history-candles?instId="+encodeURIComponent(s)+"&bar=15m&limit=300"+(before!==null?("&after="+(before-1)):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5]??0)})), valid:j=>String(j?.code)==="0" },
+        WEEX: { pageLimit:100, url:(s,before)=>"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol="+encodeURIComponent(s)+"&interval=15m&limit=100"+(before!==null?("&startTime="+(before-100*intervalMs)+"&endTime="+(before-1)):""), rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5]??0)})), valid:j=>Array.isArray(j) },
+        HTX: { pageLimit:2000, url:s=>"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code="+encodeURIComponent(s)+"&period=15min&size=2000", rows:j=>(j?.data||[]).map(x=>({t:Number(x.id)*1000,o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.vol??x.amount??0)})), valid:j=>j?.status==="ok" },
+        "KuCoin": { pageLimit:200, url:(s,before)=>"https://api-futures.kucoin.com/api/v1/kline/query?symbol="+encodeURIComponent(s)+"&granularity=15"+(before!==null?("&from="+(before-200*intervalMs)+"&to="+(before-1)):""), rows:j=>(j?.data||[]).map(x=>({t:Number(x[0])>1e12?Number(x[0]):Number(x[0])*1000,o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5]??0)})), valid:j=>String(j?.code)==="200000" },
+        XT: { pageLimit:1000, url:(s,before)=>"https://fapi.xt.com/future/market/v1/public/q/kline?symbol="+encodeURIComponent(s)+"&interval=15m&limit=1000"+(before!==null?("&startTime="+(before-1000*intervalMs)+"&endTime="+(before-1)):""), rows:j=>(Array.isArray(j?.result)?j.result:[]).map(x=>({t:Number(x.t),o:Number(x.o),h:Number(x.h),l:Number(x.l),c:Number(x.c),v:Number(x.a??x.v??0)})), valid:j=>j?.returnCode===0 }
       }[exchange];
       const symbolResults = await mapWithConcurrency(universe, exchange==="BingX"?1:2, async symbol => {
-        const endpoint=adapter.url(symbol);
-        let lastHttp=null,lastError=null,rows=[];
-        for(let attempt=0;attempt<3;attempt++){
-          try{
-            const response=await fetch(endpoint,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:AbortSignal.timeout(TIMEOUT_MS)});
-            lastHttp=response.status;
-            const raw=await response.text();
-            let j;try{j=JSON.parse(raw)}catch{throw new Error("Invalid JSON response")}
-            if(!response.ok){
-              if(attempt<2&&[429,500,502,503,504].includes(response.status)){await sleep(1000*(attempt+1));continue}
-              throw new Error("HTTP "+response.status);
-            }
-            if(!adapter.valid(j)) throw new Error("Exchange API response code/status rejected");
-            rows=adapter.rows(j).filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.o>0&&x.c>0&&x.h>=Math.max(x.o,x.c)&&x.l<=Math.min(x.o,x.c)&&x.h>=x.l&&x.v>=0);
-            break;
-          }catch(error){lastError=String(error.message||error);if(attempt<2&&/429|HTTP 5|Timeout/i.test(lastError)){await sleep(1000*(attempt+1));continue}break}
+        let lastHttp=null,lastError=null,rows=[],pages=0,cursor=null;
+        const maxPages=20, pageReports=[];
+        for(let page=0;page<maxPages && new Set(rows.map(x=>x.t)).size<targetCandles;page++){
+          let pageRows=[],accepted=false;
+          for(let attempt=0;attempt<3;attempt++){
+            try{
+              const response=await fetch(adapter.url(symbol,cursor),{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:AbortSignal.timeout(TIMEOUT_MS)});
+              lastHttp=response.status;
+              const raw=await response.text();
+              let j;try{j=JSON.parse(raw)}catch{throw new Error("Invalid JSON response")}
+              if(!response.ok){
+                if(attempt<2&&[429,500,502,503,504].includes(response.status)){await sleep(1000*(attempt+1));continue}
+                throw new Error("HTTP "+response.status);
+              }
+              if(!adapter.valid(j)) throw new Error("Exchange API response code/status rejected");
+              pageRows=adapter.rows(j).filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.o>0&&x.c>0&&x.h>=Math.max(x.o,x.c)&&x.l<=Math.min(x.o,x.c)&&x.h>=x.l&&x.v>=0);
+              accepted=true;break;
+            }catch(error){lastError=String(error.message||error);if(attempt<2&&/429|HTTP 5|Timeout/i.test(lastError)){await sleep(1000*(attempt+1));continue}break}
+          }
+          if(!accepted||!pageRows.length)break;
+          const beforeCount=rows.length;rows.push(...pageRows);pages++;
+          const pageUnique=[...new Map(rows.map(x=>[x.t,x])).values()];
+          const oldest=Math.min(...pageRows.map(x=>x.t));
+          pageReports.push({page:page+1,received:pageRows.length,uniqueTotal:pageUnique.length,oldestAt:new Date(oldest).toISOString()});
+          if(pageUnique.length>=targetCandles||exchange==="HTX")break;
+          if(rows.length===beforeCount){lastError="Pagination page added no rows";break}
+          const nextCursor=oldest-1;
+          if(cursor!==null&&nextCursor>=cursor){lastError="Pagination cursor did not move backward";break}
+          cursor=nextCursor;
+          await sleep(80);
         }
         const unique=[...new Map(rows.map(x=>[x.t,x])).values()].sort((a,b)=>a.t-b.t);
         const gaps=[];for(let i=1;i<unique.length;i++)if(unique[i].t-unique[i-1].t!==intervalMs)gaps.push({from:unique[i-1].t,to:unique[i].t});
@@ -1445,7 +1459,15 @@ async function runFullUniverseOhlcAudit() {
           vwap=totalVolume>0?sample.reduce((a,b)=>a+((b.h+b.l+b.c)/3)*b.v,0)/totalVolume:null;
         }
         const historyReady=enough&&gaps.length===0&&fresh&&volumeReady&&Number.isFinite(cci1200)&&Number.isFinite(vwap);
-        return {symbol,status:historyReady?"PASS":unique.length?"PARTIAL":"FAIL",httpStatus:lastHttp,candles:unique.length,targetCandles,gapCount:gaps.length,latestCandleAt:latest?new Date(latest).toISOString():null,fresh,volumeReady,cci1200,vwap,error:lastError||(unique.length<targetCandles?"API page limit/history pagination required":!volumeReady?"Missing or zero volume":gaps.length?"Candle gaps detected":!fresh?"Latest candle stale":null)};
+        const reasons=[];
+        if(lastError)reasons.push(lastError);
+        if(!enough)reasons.push("Insufficient history: "+unique.length+"/"+targetCandles+" candles after "+pages+" page(s)");
+        if(gaps.length)reasons.push("Candle gaps detected: "+gaps.length);
+        if(!fresh)reasons.push("Latest candle is stale or missing");
+        if(!volumeReady)reasons.push("Missing or zero volume in one or more candles");
+        if(enough&&!Number.isFinite(cci1200))reasons.push("CCI(1200) could not be calculated");
+        if(enough&&!Number.isFinite(vwap))reasons.push("VWAP could not be calculated");
+        return {symbol,status:historyReady?"PASS":unique.length?"PARTIAL":"FAIL",httpStatus:lastHttp,candles:unique.length,targetCandles,pages,pageReports,gapCount:gaps.length,latestCandleAt:latest?new Date(latest).toISOString():null,fresh,volumeReady,cci1200,vwap,error:reasons.join("; ")||null};
       });
       const passCount=symbolResults.filter(x=>x.status==="PASS").length;
       const failCount=symbolResults.filter(x=>x.status==="FAIL").length;
