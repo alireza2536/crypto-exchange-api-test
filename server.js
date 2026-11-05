@@ -193,9 +193,10 @@ async function collectExchangeOi(exchange, options = {}) {
     XT: "https://fapi.xt.com/future/market/v1/public/symbol/list"
   }[exchange];
   const snapshots = [];
+  let discoveredSymbolsList = [];
   if (exchange === "MEXC") {
     const [tickers, contracts] = await Promise.all([
-      fetchPublicJson(source),
+      options.discoveryOnly ? Promise.resolve({ success: true, code: 0, data: [] }) : fetchPublicJson(source),
       fetchPublicJson("https://api.mexc.com/api/v1/contract/detail")
     ]);
     if (!(tickers?.success === true || tickers?.code === 0) || !(contracts?.success === true || contracts?.code === 0) || !Array.isArray(contracts.data)) {
@@ -205,17 +206,21 @@ async function collectExchangeOi(exchange, options = {}) {
     for (const contract of contracts.data) {
       const typeLabel = Number(contract?.typeLabel); // Require the official crypto/normal label explicitly; missing classification is not accepted.
       if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0 || isExplicitTradFiContract(contract)) continue;
+      discoveredSymbolsList.push(contract.symbol);
       const ticker = tickerBySymbol.get(contract.symbol);
       const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
       if (snap) snapshots.push(snap);
     }
+    snapshots.discoveredSymbolsList = discoveredSymbolsList;
+    snapshots.discoveredSymbols = discoveredSymbolsList.length;
+    if (options.discoveryOnly) return snapshots;
     if (!snapshots.length) throw new Error("MEXC returned no active USDT contract OI values");
   } else if (exchange === "OKX") {
     const [j, catalog] = await Promise.all([
-      fetchPublicJson(source),
+      options.discoveryOnly ? Promise.resolve({ code: "0", data: [] }) : fetchPublicJson(source),
       fetchPublicJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP")
     ]);
-    if (String(j?.code) !== "0" || !Array.isArray(j.data)) throw new Error("OKX open-interest schema/status check failed");
+    if (!options.discoveryOnly && (String(j?.code) !== "0" || !Array.isArray(j.data))) throw new Error("OKX open-interest schema/status check failed");
     if (String(catalog?.code) !== "0" || !Array.isArray(catalog.data)) throw new Error("OKX SWAP instrument catalog schema/status check failed");
     // OKX exposes the underlying asset category in official instrument metadata:
     // 1 = Crypto, 3 = Stocks, with other categories for non-crypto assets.
@@ -224,6 +229,10 @@ async function collectExchangeOi(exchange, options = {}) {
       .map(instrument => instrument?.instId)
       .filter(Boolean));
     if (!cryptoSwapIds.size) throw new Error("OKX instrument catalog returned no instruments explicitly classified as crypto");
+    discoveredSymbolsList = [...cryptoSwapIds].filter(symbol => usdtSymbol(exchange, symbol));
+    snapshots.discoveredSymbolsList = discoveredSymbolsList;
+    snapshots.discoveredSymbols = discoveredSymbolsList.length;
+    if (options.discoveryOnly) return snapshots;
     for (const row of j.data) {
       if (usdtSymbol(exchange, row?.instId) && cryptoSwapIds.has(row.instId)) {
         const snap = toSnapshot(exchange, row.instId, row.oi, source);
@@ -244,9 +253,13 @@ async function collectExchangeOi(exchange, options = {}) {
       if (String(row?.quoteCurrency ?? "").toUpperCase() !== "USDT" ||
           String(row?.settleCurrency ?? "").toUpperCase() !== "USDT" ||
           !usdtSymbol(exchange, symbol)) continue;
+      discoveredSymbolsList.push(symbol);
       const snap = toSnapshot(exchange, symbol, row?.openInterest, source);
       if (snap) snapshots.push(snap);
     }
+    snapshots.discoveredSymbolsList = discoveredSymbolsList;
+    snapshots.discoveredSymbols = discoveredSymbolsList.length;
+    if (options.discoveryOnly) return snapshots;
     if (!snapshots.length) throw new Error("KuCoin returned no explicitly crypto-classified USDT-M open-interest rows");
   } else {
     let symbols = [];
@@ -388,7 +401,13 @@ async function collectExchangeOi(exchange, options = {}) {
       }));
     }
     if (!symbols.length) throw new Error(exchange + " returned no active USDT contract symbols");
+    discoveredSymbolsList = [...symbols];
     const totalDiscoveredSymbols = symbols.length;
+    if (options.discoveryOnly) {
+      snapshots.discoveredSymbolsList = discoveredSymbolsList;
+      snapshots.discoveredSymbols = totalDiscoveredSymbols;
+      return snapshots;
+    }
     const cursorIndex = Math.max(0, Number(options.cursorIndex) || 0) % totalDiscoveredSymbols;
     const batchLimit = Math.max(1, Number(options.batchLimit) || OI_ROTATING_BATCH_SIZE);
     const allRetrySymbols = [...new Set((Array.isArray(options.retrySymbols) ? options.retrySymbols : [])
@@ -454,6 +473,7 @@ async function collectExchangeOi(exchange, options = {}) {
       ...deferredRetrySymbols
     ])];
     snapshots.discoveredSymbols = totalDiscoveredSymbols;
+    snapshots.discoveredSymbolsList = discoveredSymbolsList;
     snapshots.batchSize = batchSymbols.length;
     snapshots.nextCursorIndex = (cursorIndex + freshSymbols.length) % totalDiscoveredSymbols;
     if (!snapshots.length && !snapshots.partialFailures) throw new Error("No valid Open Interest values returned for selected USDT contract batch");
@@ -1393,9 +1413,9 @@ async function runFullUniverseOhlcAudit() {
       let discoveredCount = null;
       let discoveryError = null;
       try {
-        const snapshots = await collectExchangeOi(exchange, { batchLimit: Number.MAX_SAFE_INTEGER, cursorIndex: 0, retrySymbols: [] });
-        universe = [...new Set(snapshots.map(row => row.symbol).filter(Boolean))];
-        discoveredCount = Number.isInteger(snapshots.discoveredSymbols) ? snapshots.discoveredSymbols : null;
+        const catalog = await collectExchangeOi(exchange, { batchLimit: Number.MAX_SAFE_INTEGER, cursorIndex: 0, retrySymbols: [], discoveryOnly: true });
+        universe = [...new Set((catalog.discoveredSymbolsList || []).filter(Boolean))];
+        discoveredCount = Number.isInteger(catalog.discoveredSymbols) ? catalog.discoveredSymbols : null;
         if (!universe.length) throw new Error("Catalog produced no verified symbols with usable OI responses");
       } catch (error) {
         discoveryError = String(error.message || error);
