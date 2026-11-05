@@ -1477,7 +1477,7 @@ async function runFullUniverseOhlcAudit() {
       return {exchange,status,discoveredCount,testedCount:universe.length,passCount,failCount,partialCount,universeComplete:completeUniverse,durationMs:Date.now()-exchangeStarted,symbolResults};
     });
     const allPass=exchangeResults.length===exchanges.length&&exchangeResults.every(x=>x.status==="PASS");
-    return {startedAt,finishedAt:new Date().toISOString(),purpose:"Full discovered-universe 15m OHLCV audit. PASS requires every catalog symbol, 1,200 unique gap-free fresh candles, positive volume, finite CCI(1200), and VWAP.",targetCandles,exchangeCount:exchanges.length,overallStatus:allPass?"PASS":"NOT_APPROVED",results:exchangeResults,warning:"This initial full-universe pass intentionally does not claim PASS where an exchange endpoint returns fewer than 1,200 candles in one page; those symbols need verified pagination before approval."};
+    return {startedAt,finishedAt:new Date().toISOString(),purpose:"Full discovered-universe 15m OHLCV audit. PASS requires every catalog symbol, 1,200 unique gap-free fresh candles, positive volume, finite CCI(1200), and VWAP.",targetCandles,exchangeCount:exchanges.length,overallStatus:allPass?"PASS":"NOT_APPROVED",results:exchangeResults,warning:"Full-universe 15m audit uses exchange-specific pagination where supported; HTX uses its documented maximum-size response. PASS still requires complete symbol discovery and every symbol to meet all history, volume, freshness, CCI and VWAP checks."};
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1934,7 +1934,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const body = await runFullUniverseOhlcAudit();
         fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "COMPLETED", finishedAt: new Date().toISOString(), result: body, error: null };
-        console.log(JSON.stringify({ event: "full_universe_ohlc_job_finished", jobId, status: fullUniverseAuditJob.status, finishedAt: fullUniverseAuditJob.finishedAt, overallStatus: body?.overallStatus, exchanges: (body?.results || []).map(x => ({ exchange: x.exchange, status: x.status, discoveredCount: x.discoveredCount, testedCount: x.testedCount, passCount: x.passCount, partialCount: x.partialCount, failCount: x.failCount })) }));
+        console.log(JSON.stringify({ event: "full_universe_ohlc_job_finished", jobId, status: fullUniverseAuditJob.status, finishedAt: fullUniverseAuditJob.finishedAt, overallStatus: body?.overallStatus, exchanges: (body?.results || []).map(x => ({ exchange: x.exchange, status: x.status, discoveredCount: x.discoveredCount, testedCount: x.testedCount, passCount: x.passCount, partialCount: x.partialCount, failCount: x.failCount, universeComplete: x.universeComplete, issueSamples: (x.symbolResults || []).filter(y => y.status !== "PASS").slice(0, 8).map(y => ({ symbol: y.symbol, status: y.status, candles: y.candles, pages: y.pages, gapCount: y.gapCount, error: y.error })) })) }));
       } catch (error) {
         fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "FAILED", finishedAt: new Date().toISOString(), error: String(error.message || error) };
         console.error(JSON.stringify({ event: "full_universe_ohlc_job_failed", jobId, error: fullUniverseAuditJob.error }));
