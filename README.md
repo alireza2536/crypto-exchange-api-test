@@ -35,3 +35,11 @@ Create a new Web Service from this repository. Render can use the included `rend
 PASS requires an HTTP-success response and a recognizable exchange response structure. FAIL can mean a changed endpoint/schema, rate limiting, network restriction, or exchange-side outage. A PASS confirms only this public endpoint probe at that moment; it does not certify all futures endpoints or trading operations.
 
 XT uses the official public USDT-M futures all-tickers endpoint `/future/market/v1/public/q/tickers`; the response is validated using `returnCode` and the ticker fields `s` (symbol) and `c` (last price).
+
+
+## Initial OI storage gate
+Before a contract can produce an Open Interest snapshot for persistent storage, it must pass both initial entry checks:
+- Its base asset must not be a known USD-pegged stablecoin.
+- Its current USDT price must be at most 30; exactly 30 is allowed.
+- If a usable current price is unavailable, the symbol is excluded from that collection batch (fail closed).
+The gate runs before the OI endpoint request and before insertion into `oi_snapshots`. The full-universe API audit's `discoveryOnly` path intentionally remains unfiltered so exchange API coverage can still be measured independently of scanner eligibility.
