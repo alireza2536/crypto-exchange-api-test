@@ -1380,6 +1380,8 @@ async function runDataSweep() {
   console.log(JSON.stringify({event:"startup_market_data_probe",finishedAt:new Date().toISOString(),passed,total:results.length,results}));
 }
 
+let fullUniverseAuditJob = null;
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   res.setHeader("access-control-allow-origin", "*");
@@ -1818,6 +1820,36 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({finishedAt:new Date().toISOString(),purpose:"Paginated 1d history test for EMA20/EMA50; historyReady requires 60 unique daily candles, zero daily gaps, and a fresh latest candle.",passed,total:results.length,historyReadyCount:ready,results,warning:"This validates BTC-USDT daily history only; it does not by itself confirm every symbol or production integration."}));
   }
 
+  if (url.pathname === "/api/full-universe-ohlc-status") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    return res.end(JSON.stringify(fullUniverseAuditJob || { status: "NOT_STARTED" }));
+  }
+  if (url.pathname === "/api/full-universe-ohlc-start" && req.method === "POST") {
+    if (fullUniverseAuditJob?.status === "RUNNING") {
+      res.writeHead(202, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ accepted: true, alreadyRunning: true, job: fullUniverseAuditJob }));
+    }
+    const jobId = Date.now().toString(36);
+    fullUniverseAuditJob = { jobId, status: "RUNNING", startedAt: new Date().toISOString(), finishedAt: null, result: null, error: null };
+    console.log(JSON.stringify({ event: "full_universe_ohlc_job_started", jobId, startedAt: fullUniverseAuditJob.startedAt }));
+    void (async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${PORT}/api/full-universe-ohlc-test`, {
+          headers: { accept: "application/json" },
+          signal: AbortSignal.timeout(60 * 60 * 1000)
+        });
+        const body = await response.json();
+        fullUniverseAuditJob = { ...fullUniverseAuditJob, status: response.ok ? "COMPLETED" : "FAILED", finishedAt: new Date().toISOString(), result: body, error: response.ok ? null : "HTTP " + response.status };
+        console.log(JSON.stringify({ event: "full_universe_ohlc_job_finished", jobId, status: fullUniverseAuditJob.status, finishedAt: fullUniverseAuditJob.finishedAt, overallStatus: body?.overallStatus, exchanges: (body?.results || []).map(x => ({ exchange: x.exchange, status: x.status, discoveredCount: x.discoveredCount, testedCount: x.testedCount, passCount: x.passCount, partialCount: x.partialCount, failCount: x.failCount })) }));
+      } catch (error) {
+        fullUniverseAuditJob = { ...fullUniverseAuditJob, status: "FAILED", finishedAt: new Date().toISOString(), error: String(error.message || error) };
+        console.error(JSON.stringify({ event: "full_universe_ohlc_job_failed", jobId, error: fullUniverseAuditJob.error }));
+      }
+    })();
+    res.writeHead(202, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    return res.end(JSON.stringify({ accepted: true, jobId, status: "RUNNING", statusEndpoint: "/api/full-universe-ohlc-status" }));
+  }
+
   if (url.pathname === "/api/full-universe-ohlc-test") {
     const exchanges = ["MEXC", "BingX", "OKX", "WEEX", "HTX", "KuCoin", "XT"];
     const targetCandles = 1200;
@@ -1922,6 +1954,13 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Exchange API test service listening on ${PORT}`);
+  // Automatically start the full-universe audit after lightweight startup diagnostics finish.
+  setTimeout(() => {
+    fetch(`http://127.0.0.1:${PORT}/api/full-universe-ohlc-start`, { method: "POST" })
+      .then(response => response.text())
+      .then(body => console.log(JSON.stringify({ event: "full_universe_ohlc_auto_start_response", body: body.slice(0, 1000) })))
+      .catch(error => console.error("Full-universe audit auto-start failed:", error?.message || String(error)));
+  }, 90000).unref();
   if (oiSnapshotPool) {
     initOiSnapshotDb().then(async ready => {
       console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready, error: oiSnapshotDbError }));
