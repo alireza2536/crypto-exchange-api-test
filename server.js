@@ -1831,7 +1831,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const snapshots = await collectExchangeOi(exchange, { batchLimit: Number.MAX_SAFE_INTEGER, cursorIndex: 0, retrySymbols: [] });
         universe = [...new Set(snapshots.map(row => row.symbol).filter(Boolean))];
-        discoveredCount = snapshots.discoveredSymbols ?? universe.length;
+        discoveredCount = Number.isInteger(snapshots.discoveredSymbols) ? snapshots.discoveredSymbols : null;
         if (!universe.length) throw new Error("Catalog produced no verified symbols with usable OI responses");
       } catch (error) {
         discoveryError = String(error.message || error);
@@ -1886,7 +1886,7 @@ const server = http.createServer(async (req, res) => {
       const passCount=symbolResults.filter(x=>x.status==="PASS").length;
       const failCount=symbolResults.filter(x=>x.status==="FAIL").length;
       const partialCount=symbolResults.filter(x=>x.status==="PARTIAL").length;
-      const completeUniverse=discoveredCount===universe.length;
+      const completeUniverse=discoveredCount!==null&&discoveredCount===universe.length;
       const status=completeUniverse&&passCount===universe.length?"PASS":passCount+failCount+partialCount===universe.length?"PARTIAL":"BLOCKED";
       return {exchange,status,discoveredCount,testedCount:universe.length,passCount,failCount,partialCount,universeComplete:completeUniverse,durationMs:Date.now()-exchangeStarted,symbolResults};
     });
