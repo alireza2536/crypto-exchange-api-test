@@ -1,0 +1,30 @@
+name: Keep Render audit service awake
+
+on:
+  push:
+    branches:
+      - full-universe-ohlc-audit
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Ping the free Render service while the audit runs
+        env:
+          HEALTH_URL: https://full-universe-ohlc-audit.onrender.com/health?source=github-actions
+        run: |
+          set -u
+          for i in $(seq 1 66); do
+            code=$(curl --silent --show-error --output /tmp/health.json --write-out '%{http_code}' --max-time 25 "$HEALTH_URL" || true)
+            echo "Keepalive ping $i/66: HTTP ${code:-request-failed}"
+            if [ -f /tmp/health.json ]; then
+              cat /tmp/health.json
+              echo
+            fi
+            sleep 300
+          done
