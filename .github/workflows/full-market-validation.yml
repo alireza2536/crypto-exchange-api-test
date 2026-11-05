@@ -121,3 +121,288 @@ jobs:
           console.log(JSON.stringify({event:"seven_exchange_15m_volume_vwap_test",at:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results},null,2));
           if(results.some(x=>x.status!=="PASS"))process.exit(1);
           NODE
+
+      - name: Validate fresh 15m candles for every active crypto USDT perpetual symbol
+        env:
+          BASE_URL: https://exchange-api-connectivity-test.onrender.com
+        run: |
+          node <<'NODE'
+          
+          const BASE = process.env.BASE_URL || "https://exchange-api-connectivity-test.onrender.com";
+          const NAMES = ["MEXC","BingX","OKX","WEEX","HTX","KuCoin","XT"];
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          const nowSec = () => Math.floor(Date.now()/1000);
+          function fail(message){throw new Error(message);}
+          function rowsFrom(v){return Array.isArray(v)?v:(v?[v]:[]);}
+          function usdtSymbol(exchange,symbol){
+            if(typeof symbol!=="string")return false;
+            if(exchange==="MEXC")return symbol.endsWith("_USDT");
+            if(exchange==="BingX")return symbol.endsWith("-USDT");
+            if(exchange==="OKX")return symbol.endsWith("-USDT-SWAP");
+            if(exchange==="WEEX")return symbol.toUpperCase().endsWith("USDT");
+            if(exchange==="HTX")return symbol.endsWith("-USDT");
+            if(exchange==="KuCoin")return symbol.toUpperCase().endsWith("USDTM");
+            if(exchange==="XT")return symbol.toLowerCase().endsWith("_usdt");
+            return false;
+          }
+          function isExplicitTradFiContract(row){
+            const xtNonCryptoPlateIds=new Set([31,32,35,39,41,42]);
+            if(Array.isArray(row?.plates)&&row.plates.some(id=>xtNonCryptoPlateIds.has(Number(id))))return true;
+            const fields=[row?.assetClass,row?.asset_class,row?.assetType,row?.asset_type,row?.baseAssetType,row?.baseAssetSubType,row?.base_asset_type,row?.base_asset_sub_type,row?.marketType,row?.market_type,row?.businessType,row?.business_type,row?.productType,row?.product_type,row?.category,row?.symbolType,row?.symbol_type,row?.instrumentType,row?.instrument_type,row?.underlyingType,row?.underlying_type];
+            const normalized=fields.filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase().replace(/[\s_-]+/g,""));
+            const names=[row?.baseCoinName,row?.baseCoinNameEn,row?.enName,row?.enDesc,row?.cnName,row?.cnDesc,row?.displayName,row?.description].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase());
+            return normalized.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(v))||names.some(v=>/(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(v));
+          }
+          function hasHtxOfficialTradFiLabel(row){
+            const labels=[...(Array.isArray(row?.labels)?row.labels:[]),...(Array.isArray(row?.tradfi_labels)?row.tradfi_labels:[])].map(v=>String(v??"").trim().toLowerCase().replace(/[\s_-]+/g,""));
+            return labels.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy|etf|preipo)$/.test(v));
+          }
+          function isBingXTradFiSymbol(symbol){
+            const base=String(symbol??"").split("-")[0].toUpperCase();
+            return /^(NCS|NCCO|NCF)/.test(base);
+          }
+          async function fetchJson(url,exchange){
+            let lastError=null;
+            for(let attempt=0;attempt<4;attempt++){
+              try{
+                const response=await fetch(url,{headers:{accept:"application/json","user-agent":"exchange-api-connectivity-test/1.0"},signal:AbortSignal.timeout(20000)});
+                const raw=await response.text();
+                let json=null;
+                try{json=JSON.parse(raw)}catch{}
+                const apiCode=Number(json?.code??json?.returnCode);
+                const transientHttp=[429,500,502,503,504].includes(response.status);
+                const transientApi=[100410,100429].includes(apiCode)||(exchange==="MEXC"&&apiCode===510);
+                if((transientHttp||transientApi)&&attempt<3){
+                  await sleep([1500,3000,6000][attempt]);
+                  continue;
+                }
+                if(!response.ok)fail("HTTP "+response.status+" "+url);
+                if(!json)fail("Invalid JSON from "+url);
+                return {json,httpStatus:response.status,retries:attempt};
+              }catch(error){
+                lastError=String(error.message||error);
+                if(attempt<3&&(/HTTP 429|HTTP 5\d\d|Timeout|fetch failed|network/i.test(lastError))){
+                  await sleep([1500,3000,6000][attempt]);
+                  continue;
+                }
+                throw error;
+              }
+            }
+            throw new Error(lastError||"Request failed after retries: "+url);
+          }
+          async function catalogFor(exchange){
+            if(exchange==="MEXC"){
+              const j=(await fetchJson("https://api.mexc.com/api/v1/contract/detail",exchange)).json;
+              if(!(j?.success===true||j?.code===0)||!Array.isArray(j.data))fail("MEXC contract catalog schema/status failed");
+              const candidates=j.data.filter(r=>Number(r?.state)===0&&String(r?.settleCoin??"").toUpperCase()==="USDT"&&usdtSymbol(exchange,r?.symbol));
+              const unclassified=candidates.filter(r=>r?.typeLabel===null||r?.typeLabel===undefined).length;
+              return {symbols:[...new Set(candidates.filter(r=>Number(r?.typeLabel)===0&&!isExplicitTradFiContract(r)).map(r=>r.symbol))],unclassified};
+            }
+            if(exchange==="BingX"){
+              const j=(await fetchJson("https://open-api.bingx.com/openApi/swap/v2/quote/contracts",exchange)).json;
+              if(!(j?.code===0||j?.code==="0")||!Array.isArray(j.data))fail("BingX contract catalog schema/status failed");
+              const symbols=j.data.filter(r=>{
+                if(!usdtSymbol(exchange,r?.symbol)||isExplicitTradFiContract(r)||isBingXTradFiSymbol(r?.symbol))return false;
+                const status=String(r?.status??"").toUpperCase();
+                return !status||["TRADING","ACTIVE","ONLINE","1"].includes(status);
+              }).map(r=>r.symbol);
+              return {symbols:[...new Set(symbols)],unclassified:0};
+            }
+            if(exchange==="OKX"){
+              const j=(await fetchJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP",exchange)).json;
+              if(String(j?.code)!=="0"||!Array.isArray(j.data))fail("OKX SWAP catalog schema/status failed");
+              const candidates=j.data.filter(r=>usdtSymbol(exchange,r?.instId)&&r?.state==="live");
+              const unclassified=candidates.filter(r=>r?.instCategory===null||r?.instCategory===undefined).length;
+              return {symbols:[...new Set(candidates.filter(r=>String(r?.instCategory)==="1").map(r=>r.instId))],unclassified};
+            }
+            if(exchange==="WEEX"){
+              const [perp,tradfi,api]=(await Promise.all([
+                fetchJson("https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=PERPETUAL",exchange),
+                fetchJson("https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=TRADIFI_PERPETUAL",exchange),
+                fetchJson("https://api-contract.weex.com/capi/v3/market/apiTradingSymbols",exchange)
+              ])).map(x=>x.json);
+              if(!Array.isArray(perp?.symbols)||!Array.isArray(tradfi?.symbols)||!Array.isArray(api))fail("WEEX catalog/API-trading schema failed");
+              if(!api.length)fail("WEEX API-trading symbol catalog is empty");
+              const tradfiSymbols=new Set(tradfi.symbols.map(r=>String(r?.symbol??"").toUpperCase()).filter(Boolean));
+              const candidates=perp.symbols.filter(r=>{
+                const symbol=String(r?.symbol??"");
+                const status=String(r?.status??"").toUpperCase();
+                return r?.contractType==="PERPETUAL"&&usdtSymbol(exchange,symbol)&&
+                  !tradfiSymbols.has(symbol.toUpperCase())&&
+                  (!status||["TRADING","OPEN","1"].includes(status))&&
+                  String(r?.marginAsset??r?.quoteAsset??"USDT").toUpperCase()==="USDT";
+              });
+              const unclassified=candidates.filter(r=>String(r?.underlyingType??"").toUpperCase()!=="COIN").length;
+              const cryptoSymbols=new Set(candidates.filter(r=>String(r?.underlyingType??"").toUpperCase()==="COIN"&&!isExplicitTradFiContract(r)).map(r=>String(r.symbol).toUpperCase()));
+              const apiTradable=new Set(api.map(value=>{
+                const upper=String(value).toUpperCase();
+                const canonical=upper.replace(/SUSDT$/,"USDT");
+                return cryptoSymbols.has(canonical)?canonical:upper;
+              }).filter(Boolean));
+              return {symbols:[...new Set(candidates.map(r=>String(r.symbol)).filter(s=>cryptoSymbols.has(s.toUpperCase())&&apiTradable.has(s.toUpperCase())))],unclassified};
+            }
+            if(exchange==="HTX"){
+              const j=(await fetchJson("https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",exchange)).json;
+              if(j?.status!=="ok"||!Array.isArray(j.data))fail("HTX contract catalog schema/status failed");
+              const candidates=j.data.filter(r=>{
+                const quote=String(r?.settle_currency??r?.quote_currency??"").toUpperCase();
+                return usdtSymbol(exchange,r?.contract_code)&&(!quote||quote==="USDT")&&Number(r?.contract_status)===1;
+              });
+              const unclassified=candidates.filter(r=>!Array.isArray(r?.tradfi_labels)).length;
+              return {symbols:[...new Set(candidates.filter(r=>Array.isArray(r?.tradfi_labels)&&!hasHtxOfficialTradFiLabel(r)&&!isExplicitTradFiContract(r)).map(r=>r.contract_code))],unclassified};
+            }
+            if(exchange==="KuCoin"){
+              const j=(await fetchJson("https://api-futures.kucoin.com/api/v1/contracts/active",exchange)).json;
+              if(String(j?.code)!=="200000"||!Array.isArray(j.data))fail("KuCoin active-contract catalog schema/status failed");
+              const candidates=j.data.filter(r=>usdtSymbol(exchange,r?.symbol)&&String(r?.quoteCurrency??"").toUpperCase()==="USDT"&&String(r?.settleCurrency??"").toUpperCase()==="USDT");
+              const unclassified=candidates.filter(r=>{
+                const categories=[r?.marketType,r?.assetClass].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).toUpperCase());
+                return !categories.length;
+              }).length;
+              return {symbols:[...new Set(candidates.filter(r=>{
+                const categories=[r?.marketType,r?.assetClass].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).toUpperCase());
+                return categories.length>0&&categories.every(v=>v==="CRYPTO");
+              }).map(r=>r.symbol))],unclassified};
+            }
+            if(exchange==="XT"){
+              const [catalog,plates]=(await Promise.all([
+                fetchJson("https://fapi.xt.com/future/market/v1/public/symbol/list",exchange),
+                fetchJson("https://fapi.xt.com/future/market/v1/public/plate/list",exchange)
+              ])).map(x=>x.json);
+              if(catalog?.returnCode!==0||!Array.isArray(catalog.result))fail("XT symbol catalog schema/status failed");
+              if(plates?.returnCode!==0||!Array.isArray(plates.result))fail("XT plate catalog schema/status failed");
+              const tradfiPlates=plates.result.filter(r=>/^(tradfi|forex|tokenized stocks|commodities|index|indices|pre.?market)$/i.test(String(r?.plate??r?.name??"").trim())).map(r=>Number(r?.id)).filter(Number.isFinite);
+              if(!tradfiPlates.length)fail("XT official TradFi plate categories were not found");
+              const tradfiIds=new Set(tradfiPlates);
+              const candidates=catalog.result.filter(r=>usdtSymbol(exchange,r?.symbol)&&r?.tradeSwitch===true&&String(r?.settleCoin??r?.quoteCoin??"USDT").toUpperCase()==="USDT");
+              const unclassified=candidates.filter(r=>!Array.isArray(r?.plates)).length;
+              return {symbols:[...new Set(candidates.filter(r=>Array.isArray(r?.plates)&&!r.plates.some(id=>tradfiIds.has(Number(id)))&&!isExplicitTradFiContract(r)).map(r=>r.symbol))],unclassified};
+            }
+            fail("Unsupported exchange "+exchange);
+          }
+          function candleUrl(exchange,symbol){
+            const encoded=encodeURIComponent(symbol);
+            const from=nowSec()-86400,to=nowSec();
+            if(exchange==="MEXC")return "https://api.mexc.com/api/v1/contract/kline/"+encoded+"?interval=Min15&start="+from+"&end="+to;
+            if(exchange==="BingX")return "https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol="+encoded+"&interval=15m&limit=100";
+            if(exchange==="OKX")return "https://www.okx.com/api/v5/market/candles?instId="+encoded+"&bar=15m&limit=100";
+            if(exchange==="WEEX")return "https://api-contract.weex.com/capi/v3/market/historyKlines?symbol="+encoded+"&interval=15m&limit=100";
+            if(exchange==="HTX")return "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code="+encoded+"&period=15min&size=100";
+            if(exchange==="KuCoin")return "https://api-futures.kucoin.com/api/v1/kline/query?symbol="+encoded+"&granularity=15&from="+from+"&to="+to;
+            if(exchange==="XT")return "https://fapi.xt.com/future/market/v1/public/q/kline?symbol="+encoded+"&interval=15m&limit=100";
+            fail("No candle endpoint for "+exchange);
+          }
+          function parseCandleRows(exchange,j){
+            if(exchange==="MEXC"){
+              const d=j?.data||{};
+              return (d.time||[]).map((t,i)=>({t:Number(t)*1000,o:Number(d.open?.[i]),h:Number(d.high?.[i]),l:Number(d.low?.[i]),c:Number(d.close?.[i])}));
+            }
+            if(exchange==="BingX")return (j?.data||[]).map(x=>({t:Number(x?.time),o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close)}));
+            if(exchange==="OKX")return (j?.data||[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
+            if(exchange==="WEEX")return (Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
+            if(exchange==="HTX")return (j?.data||[]).map(x=>({t:Number(x?.id)*1000,o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close)}));
+            if(exchange==="KuCoin")return (j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
+            if(exchange==="XT")return (j?.result||[]).map(x=>({t:Number(x?.t),o:Number(x?.o),h:Number(x?.h),l:Number(x?.l),c:Number(x?.c)}));
+            return [];
+          }
+          function candleSchemaOk(exchange,j){
+            if(exchange==="MEXC")return j?.success===true&&j?.code===0&&Array.isArray(j?.data?.time);
+            if(exchange==="BingX")return (j?.code===0||j?.code==="0")&&Array.isArray(j?.data);
+            if(exchange==="OKX")return String(j?.code)==="0"&&Array.isArray(j?.data);
+            if(exchange==="WEEX")return Array.isArray(j);
+            if(exchange==="HTX")return j?.status==="ok"&&Array.isArray(j?.data);
+            if(exchange==="KuCoin")return String(j?.code)==="200000"&&Array.isArray(j?.data);
+            if(exchange==="XT")return j?.returnCode===0&&Array.isArray(j?.result);
+            return false;
+          }
+          async function testExchange(exchange,oiState){
+            const catalog=await catalogFor(exchange);
+            const symbols=[...new Set(catalog.symbols)].sort();
+            if(!symbols.length)fail(exchange+" returned no classified active USDT perpetual symbols");
+            const waitMs=exchange==="BingX"?1050:350;
+            let fresh=0,stale=0,noData=0,apiFailures=0,totalRetries=0;
+            const samples=[];
+            for(let i=0;i<symbols.length;i++){
+              if(i>0)await sleep(waitMs);
+              const symbol=symbols[i];
+              try{
+                const response=await fetchJson(candleUrl(exchange,symbol),exchange);
+                totalRetries+=response.retries;
+                if(!candleSchemaOk(exchange,response.json))fail("Unexpected 15m candle response schema");
+                const rows=parseCandleRows(exchange,response.json).filter(x=>
+                  Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c].every(Number.isFinite)&&
+                  x.o>0&&x.c>0&&x.h>=Math.max(x.o,x.c)&&x.l<=Math.min(x.o,x.c)&&x.h>=x.l
+                );
+                if(!rows.length){
+                  noData++;
+                  if(samples.length<20)samples.push({symbol,status:"NO_DATA"});
+                  continue;
+                }
+                const latest=Math.max(...rows.map(x=>x.t));
+                const ageMinutes=(Date.now()-latest)/60000;
+                if(ageMinutes>=-2&&ageMinutes<=45)fresh++;
+                else{
+                  stale++;
+                  if(samples.length<20)samples.push({symbol,status:"STALE",ageMinutes:Number(ageMinutes.toFixed(1))});
+                }
+              }catch(error){
+                apiFailures++;
+                if(samples.length<20)samples.push({symbol,status:"API_ERROR",error:String(error.message||error).slice(0,180)});
+              }
+            }
+            const state=oiState.stateByExchange.get(exchange);
+            const coverage=oiState.coverageByExchange.get(exchange);
+            const oiExpected=Number(state?.last_discovered_count||0);
+            const oiObserved=Number(coverage?.unique_symbols_last_65m||0);
+            const oiCoverageOk=oiExpected>0&&oiObserved>=oiExpected;
+            const status=catalog.unclassified===0&&fresh===symbols.length&&stale===0&&noData===0&&apiFailures===0?"PASS":"PARTIAL";
+            return {
+              exchange,status,catalogSymbols:symbols.length,unclassifiedCatalogRows:catalog.unclassified,
+              fresh15mSymbols:fresh,staleSymbols:stale,noDataSymbols:noData,apiFailures,totalRetries,
+              oiLastDiscoveredCount:oiExpected,oiUniqueSymbolsLast65m:oiObserved,oiCoverageOk,
+              samples
+            };
+          }
+          async function main(){
+            const [healthR,oiR,backupR]=await Promise.all([
+              fetchJson(BASE+"/health", "service"),
+              fetchJson(BASE+"/api/open-interest-status", "service"),
+              fetchJson(BASE+"/api/drive-backup-status", "service")
+            ]);
+            const health=healthR.json,oi=oiR.json,backup=backupR.json;
+            const healthOk=health?.ok===true&&health?.openInterestHistory?.configured===true&&health?.openInterestHistory?.databaseReady===true;
+            const oiExchanges=new Set(NAMES);
+            const coverageByExchange=new Map((oi?.coverage||[]).map(x=>[x.exchange,x]));
+            const stateByExchange=new Map((oi?.collectionState||[]).map(x=>[x.exchange,x]));
+            const oiRows=NAMES.map(exchange=>{
+              const c=coverageByExchange.get(exchange),s=stateByExchange.get(exchange);
+              const expected=Number(s?.last_discovered_count||0),observed=Number(c?.unique_symbols_last_65m||0);
+              return {exchange,observed,expected,pass:expected>0&&observed>=expected};
+            });
+            const oiOk=oi?.databaseReady===true&&oi?.collectionEnabled===true&&
+              Array.isArray(oi?.lastFailures)&&oi.lastFailures.length===0&&
+              oiRows.length===7&&oiRows.every(x=>x.pass);
+            const backupAt=backup?.lastBackupAt?Date.parse(backup.lastBackupAt):NaN;
+            const backupAgeMinutes=Number.isFinite(backupAt)?(Date.now()-backupAt)/60000:null;
+            const intervalMinutes=Number(backup?.intervalHours||6)*60;
+            const backupOk=backup?.configured===true&&backup?.databaseReady===true&&
+              backup?.lastResult?.ok===true&&backup?.pruneEnabled===false&&
+              backup?.lastResult?.pruneEnabled===false&&Number(backup?.lastResult?.prunedRecords||0)===0&&
+              backupAgeMinutes!==null&&backupAgeMinutes>=-2&&backupAgeMinutes<=intervalMinutes;
+            const oiState={coverageByExchange,stateByExchange};
+            const exchanges=await Promise.all(NAMES.map(exchange=>testExchange(exchange,oiState)));
+            const fullUniverseOk=exchanges.every(x=>x.status==="PASS"&&x.oiCoverageOk);
+            const result={
+              event:"full_universe_15m_candle_coverage",
+              at:new Date().toISOString(),
+              health:{pass:healthOk,databaseReady:health?.openInterestHistory?.databaseReady},
+              openInterest:{pass:oiOk,databaseReady:oi?.databaseReady,collectionEnabled:oi?.collectionEnabled,lastFailures:oi?.lastFailures,coverage:oiRows},
+              googleDriveBackup:{pass:backupOk,lastBackupAt:backup?.lastBackupAt,ageMinutes:backupAgeMinutes,intervalHours:backup?.intervalHours,pruneEnabled:backup?.pruneEnabled,prunedRecords:backup?.lastResult?.prunedRecords},
+              fullUniverse:{pass:fullUniverseOk,totalSymbols:exchanges.reduce((n,x)=>n+x.catalogSymbols,0),exchanges}
+            };
+            console.log(JSON.stringify(result,null,2));
+            if(!healthOk||!oiOk||!backupOk||!fullUniverseOk)process.exit(1);
+          }
+          main().catch(error=>{console.error(JSON.stringify({event:"full_universe_15m_candle_coverage",status:"FAIL",error:String(error.message||error)}));process.exit(1)});
+          
+          NODE
