@@ -607,7 +607,10 @@ async function collectExchangeOi(exchange, options = {}) {
       throw new Error("No valid Open Interest values returned for the eligible USDT contract batch");
     }
   }
-  if (!snapshots.length && !snapshots.partialFailures) throw new Error("No active USDT contract Open Interest values parsed");
+  if (!snapshots.length && !snapshots.partialFailures &&
+      (snapshots.initialFilter?.allowed ?? 1) > 0) {
+    throw new Error("No active USDT contract Open Interest values parsed for the eligible initial-filter universe");
+  }
   return snapshots;
 }
 
