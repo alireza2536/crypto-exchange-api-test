@@ -14,7 +14,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      - name: Ping the free Render service while the audit runs
+      - name: Wait for Render deploy and start the full-universe audit
+        env:
+          BASE_URL: https://full-universe-ohlc-audit.onrender.com
+        run: |
+          set -u
+          ready=0
+          for i in $(seq 1 60); do
+            code=$(curl --silent --output /tmp/health.json --write-out '%{http_code}' --max-time 20 "$BASE_URL/health?source=github-actions" || true)
+            echo "Waiting for Render service $i/60: HTTP ${code:-request-failed}"
+            if [ "$code" = "200" ]; then
+              ready=1
+              break
+            fi
+            sleep 10
+          done
+          if [ "$ready" != "1" ]; then
+            echo "Render service did not become healthy; refusing to start audit."
+            exit 1
+          fi
+          echo "Starting full-universe audit"
+          curl --fail-with-body --silent --show-error --max-time 30 -X POST "$BASE_URL/api/full-universe-ohlc-start"
+          echo
+      - name: Keep the free Render service awake while the audit runs
         env:
           HEALTH_URL: https://full-universe-ohlc-audit.onrender.com/health?source=github-actions
         run: |
