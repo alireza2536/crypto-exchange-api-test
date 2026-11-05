@@ -31,6 +31,11 @@ test("price above 30 is rejected, while exactly 30 is allowed", () => {
   assert.equal(initialEntryDecision("OKX", "ALT-USDT-SWAP", 0.01).allowed, true);
 });
 
+test("multiplier-denominated contracts are compared by underlying coin price", () => {
+  assert.equal(initialEntryDecision("OKX", "1000SHIB-USDT-SWAP", 30000).allowed, true);
+  assert.equal(initialEntryDecision("OKX", "1000SHIB-USDT-SWAP", 30001).reason, "PRICE_ABOVE_30_USDT");
+});
+
 test("missing, zero, and invalid prices fail closed", () => {
   assert.equal(initialEntryDecision("MEXC", "ALT_USDT", undefined).reason, "PRICE_UNAVAILABLE");
   assert.equal(initialEntryDecision("MEXC", "ALT_USDT", 0).reason, "PRICE_UNAVAILABLE");
