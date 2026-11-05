@@ -1,0 +1,33 @@
+name: Initial entry filter storage tests
+
+on:
+  pull_request:
+    branches: [full-universe-ohlc-audit]
+    paths:
+      - "server.js"
+      - "scripts/initial-entry-filter.js"
+      - "scripts/test-initial-entry-filter.js"
+      - ".github/workflows/initial-entry-filter-tests.yml"
+  push:
+    branches: [initial-entry-filter-oi-storage]
+    paths:
+      - "server.js"
+      - "scripts/initial-entry-filter.js"
+      - "scripts/test-initial-entry-filter.js"
+      - ".github/workflows/initial-entry-filter-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run initial entry gate tests
+        run: npm test
+      - name: Validate server syntax
+        run: node --check server.js
