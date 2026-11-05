@@ -1,5 +1,6 @@
 import http from "node:http";
 import pg from "pg";
+import { baseSymbolFromContract, initialEntryDecision, newInitialFilterCounts, recordInitialFilterDecision } from "./scripts/initial-entry-filter.js";
 const { Pool } = pg;
 
 const PORT = Number(process.env.PORT || 3000);
@@ -182,6 +183,69 @@ function toSnapshot(exchange, symbol, value, sourceEndpoint) {
   return oi === null ? null : { exchange, symbol, metric: "open_interest_native", value: oi, source_endpoint: sourceEndpoint };
 }
 
+
+async function fetchBulkOiPriceMap(exchange) {
+  if (exchange === "BingX") {
+    const j = await fetchPublicJson("https://open-api.bingx.com/openApi/swap/v2/quote/ticker");
+    if (!(j?.code === 0 || j?.code === "0") || !Array.isArray(j.data)) {
+      throw new Error("BingX ticker catalog schema/status check failed");
+    }
+    return new Map(j.data.map(row => [String(row?.symbol ?? ""), Number(row?.lastPrice)]));
+  }
+  if (exchange === "XT") {
+    const j = await fetchPublicJson("https://fapi.xt.com/future/market/v1/public/q/tickers");
+    if (j?.returnCode !== 0 || !Array.isArray(j.result)) {
+      throw new Error("XT ticker catalog schema/status check failed");
+    }
+    return new Map(j.result.map(row => [String(row?.s ?? ""), Number(row?.c)]));
+  }
+  return null;
+}
+
+async function fetchSingleOiPrice(exchange, symbol) {
+  if (exchange === "WEEX") {
+    const j = await fetchPublicJson(
+      "https://api-contract.weex.com/capi/v3/market/ticker/24hr?symbol=" + encodeURIComponent(symbol)
+    );
+    const rows = rowsFrom(j);
+    const row = rows.find(item => String(item?.symbol ?? "").toUpperCase() === String(symbol).toUpperCase()) ?? rows[0];
+    return Number(row?.lastPrice);
+  }
+  if (exchange === "HTX") {
+    const j = await fetchPublicJson(
+      "https://api.hbdm.com/linear-swap-ex/market/detail/merged?contract_code=" + encodeURIComponent(symbol)
+    );
+    if (j?.status !== "ok") throw new Error("HTX ticker status " + j?.status);
+    return Number(j?.tick?.close);
+  }
+  throw new Error(exchange + " has no configured single-symbol ticker fallback");
+}
+
+async function filterOiSymbols(exchange, symbols, priceMap = null) {
+  const counts = newInitialFilterCounts();
+  const concurrency = exchange === "WEEX" || exchange === "HTX" ? 2 : 6;
+  const decisions = await mapWithConcurrency(symbols, concurrency, async symbol => {
+    const base = baseSymbolFromContract(exchange, symbol);
+    if (USD_STABLECOIN_BASES.has(base)) {
+      return { symbol, ...initialEntryDecision(exchange, symbol, null) };
+    }
+    let price = priceMap instanceof Map ? priceMap.get(symbol) : undefined;
+    if (!(priceMap instanceof Map)) price = await fetchSingleOiPrice(exchange, symbol);
+    return { symbol, ...initialEntryDecision(exchange, symbol, price) };
+  });
+  const allowed = [];
+  for (let index = 0; index < decisions.length; index += 1) {
+    const item = decisions[index];
+    if (item?._error) {
+      recordInitialFilterDecision(counts, { allowed: false, reason: "PRICE_UNAVAILABLE" });
+    } else {
+      recordInitialFilterDecision(counts, item);
+      if (item.allowed) allowed.push(item.symbol);
+    }
+  }
+  return { allowed, counts };
+}
+
 async function collectExchangeOi(exchange, options = {}) {
   const source = {
     MEXC: "https://api.mexc.com/api/v1/contract/ticker",
@@ -203,22 +267,32 @@ async function collectExchangeOi(exchange, options = {}) {
       throw new Error("MEXC ticker/contract catalog schema check failed");
     }
     const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
+    const filterCounts = newInitialFilterCounts();
     for (const contract of contracts.data) {
       const typeLabel = Number(contract?.typeLabel); // Require the official crypto/normal label explicitly; missing classification is not accepted.
       if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0 || isExplicitTradFiContract(contract)) continue;
-      discoveredSymbolsList.push(contract.symbol);
+      if (options.discoveryOnly) {
+        discoveredSymbolsList.push(contract.symbol);
+        continue;
+      }
       const ticker = tickerBySymbol.get(contract.symbol);
+      const decision = initialEntryDecision(exchange, contract.symbol, ticker?.lastPrice);
+      recordInitialFilterDecision(filterCounts, decision);
+      if (!decision.allowed) continue;
+      discoveredSymbolsList.push(contract.symbol);
       const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
       if (snap) snapshots.push(snap);
     }
     snapshots.discoveredSymbolsList = discoveredSymbolsList;
     snapshots.discoveredSymbols = discoveredSymbolsList.length;
     if (options.discoveryOnly) return snapshots;
-    if (!snapshots.length) throw new Error("MEXC returned no active USDT contract OI values");
+    snapshots.initialFilter = filterCounts;
+    if (!snapshots.length && filterCounts.allowed > 0) throw new Error("MEXC returned no active USDT contract OI values after initial filtering");
   } else if (exchange === "OKX") {
-    const [j, catalog] = await Promise.all([
+    const [j, catalog, tickerPayload] = await Promise.all([
       options.discoveryOnly ? Promise.resolve({ code: "0", data: [] }) : fetchPublicJson(source),
-      fetchPublicJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP")
+      fetchPublicJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP"),
+      options.discoveryOnly ? Promise.resolve(null) : fetchPublicJson("https://www.okx.com/api/v5/market/tickers?instType=SWAP")
     ]);
     if (!options.discoveryOnly && (String(j?.code) !== "0" || !Array.isArray(j.data))) throw new Error("OKX open-interest schema/status check failed");
     if (String(catalog?.code) !== "0" || !Array.isArray(catalog.data)) throw new Error("OKX SWAP instrument catalog schema/status check failed");
@@ -229,20 +303,36 @@ async function collectExchangeOi(exchange, options = {}) {
       .map(instrument => instrument?.instId)
       .filter(Boolean));
     if (!cryptoSwapIds.size) throw new Error("OKX instrument catalog returned no instruments explicitly classified as crypto");
-    discoveredSymbolsList = [...cryptoSwapIds].filter(symbol => usdtSymbol(exchange, symbol));
+    const rawCandidates = [...cryptoSwapIds].filter(symbol => usdtSymbol(exchange, symbol));
+    if (options.discoveryOnly) {
+      snapshots.discoveredSymbolsList = rawCandidates;
+      snapshots.discoveredSymbols = rawCandidates.length;
+      return snapshots;
+    }
+    if (String(tickerPayload?.code) !== "0" || !Array.isArray(tickerPayload?.data)) {
+      throw new Error("OKX ticker catalog schema/status check failed");
+    }
+    const priceMap = new Map(tickerPayload.data.map(row => [row?.instId, Number(row?.last)]));
+    const gate = await filterOiSymbols(exchange, rawCandidates, priceMap);
+    discoveredSymbolsList = gate.allowed;
     snapshots.discoveredSymbolsList = discoveredSymbolsList;
     snapshots.discoveredSymbols = discoveredSymbolsList.length;
-    if (options.discoveryOnly) return snapshots;
+    snapshots.initialFilter = gate.counts;
+    const allowedSymbols = new Set(discoveredSymbolsList);
     for (const row of j.data) {
-      if (usdtSymbol(exchange, row?.instId) && cryptoSwapIds.has(row.instId)) {
+      if (allowedSymbols.has(row?.instId)) {
         const snap = toSnapshot(exchange, row.instId, row.oi, source);
         if (snap) snapshots.push(snap);
       }
     }
-    if (!snapshots.length) throw new Error("OKX returned no crypto-classified USDT SWAP open-interest values");
+    if (!snapshots.length && gate.counts.allowed > 0) throw new Error("OKX returned no crypto-classified USDT SWAP open-interest values after initial filtering");
   } else if (exchange === "KuCoin") {
-    const j = await fetchPublicJson(source);
+    const [j, tickerPayload] = await Promise.all([
+      fetchPublicJson(source),
+      options.discoveryOnly ? Promise.resolve(null) : fetchPublicJson("https://api-futures.kucoin.com/api/v1/allTickers")
+    ]);
     if (String(j?.code) !== "200000" || !Array.isArray(j?.data)) throw new Error("KuCoin official active-contract catalog schema/status check failed");
+    const candidateRows = [];
     for (const row of j.data) {
       const symbol = row?.symbol;
       const categories = [row?.marketType, row?.assetClass]
@@ -253,14 +343,30 @@ async function collectExchangeOi(exchange, options = {}) {
       if (String(row?.quoteCurrency ?? "").toUpperCase() !== "USDT" ||
           String(row?.settleCurrency ?? "").toUpperCase() !== "USDT" ||
           !usdtSymbol(exchange, symbol)) continue;
-      discoveredSymbolsList.push(symbol);
-      const snap = toSnapshot(exchange, symbol, row?.openInterest, source);
-      if (snap) snapshots.push(snap);
+      candidateRows.push(row);
     }
+    const rawCandidates = candidateRows.map(row => row.symbol);
+    if (options.discoveryOnly) {
+      snapshots.discoveredSymbolsList = rawCandidates;
+      snapshots.discoveredSymbols = rawCandidates.length;
+      return snapshots;
+    }
+    if (String(tickerPayload?.code) !== "200000" || !Array.isArray(tickerPayload?.data)) {
+      throw new Error("KuCoin all-tickers schema/status check failed");
+    }
+    const priceMap = new Map(tickerPayload.data.map(row => [row?.symbol, Number(row?.price)]));
+    const gate = await filterOiSymbols(exchange, rawCandidates, priceMap);
+    discoveredSymbolsList = gate.allowed;
     snapshots.discoveredSymbolsList = discoveredSymbolsList;
     snapshots.discoveredSymbols = discoveredSymbolsList.length;
-    if (options.discoveryOnly) return snapshots;
-    if (!snapshots.length) throw new Error("KuCoin returned no explicitly crypto-classified USDT-M open-interest rows");
+    snapshots.initialFilter = gate.counts;
+    const allowedSymbols = new Set(discoveredSymbolsList);
+    for (const row of candidateRows) {
+      if (!allowedSymbols.has(row.symbol)) continue;
+      const snap = toSnapshot(exchange, row.symbol, row?.openInterest, source);
+      if (snap) snapshots.push(snap);
+    }
+    if (!snapshots.length && gate.counts.allowed > 0) throw new Error("KuCoin returned no crypto-classified USDT-M OI rows after initial filtering");
   } else {
     let symbols = [];
     if (exchange === "BingX") {
@@ -424,10 +530,30 @@ async function collectExchangeOi(exchange, options = {}) {
       if (!retrySymbols.includes(candidate)) freshSymbols.push(candidate);
     }
     const batchSymbols = [...retrySymbols, ...freshSymbols];
+    const priceMap = await fetchBulkOiPriceMap(exchange);
+    const gate = await filterOiSymbols(exchange, batchSymbols, priceMap);
+    const allowedBatchSymbols = gate.allowed;
+    snapshots.initialFilter = gate.counts;
+    console.log(JSON.stringify({
+      event: "oi_initial_entry_filter",
+      exchange,
+      ...gate.counts
+    }));
     // BingX's public OI endpoint is rate-limited; serialize requests to avoid bursts.
-    const concurrency = exchange === "BingX" ? 1 : exchange === "WEEX" ? 4 : 8;
+    const concurrency = exchange === "BingX" ? 1 : exchange === "WEEX" ? 2 : exchange === "HTX" ? 2 : 8;
     let lastBingXRequestAt = 0;
-    const results = await mapWithConcurrency(batchSymbols, concurrency, async symbol => {
+    if (!allowedBatchSymbols.length) {
+      snapshots.partialFailures = 0;
+      snapshots.partialFailureDetails = [];
+      snapshots.nextRetrySymbols = deferredRetrySymbols;
+      snapshots.discoveredSymbols = totalDiscoveredSymbols;
+      snapshots.discoveredSymbolsList = discoveredSymbolsList;
+      snapshots.batchSize = batchSymbols.length;
+      snapshots.allowedBatchSize = 0;
+      snapshots.nextCursorIndex = (cursorIndex + freshSymbols.length) % totalDiscoveredSymbols;
+      return snapshots;
+    }
+    const results = await mapWithConcurrency(allowedBatchSymbols, concurrency, async symbol => {
       if (exchange === "BingX") {
         const wait = 1050 - (Date.now() - lastBingXRequestAt);
         if (lastBingXRequestAt && wait > 0) await sleep(wait);
@@ -464,7 +590,7 @@ async function collectExchangeOi(exchange, options = {}) {
       if (result) snapshots.push(result);
     }
     const failedResults = results.map((result, index) => result?._error
-      ? { symbol: batchSymbols[index], error: result._error }
+      ? { symbol: allowedBatchSymbols[index], error: result._error }
       : null).filter(Boolean);
     snapshots.partialFailures = failedResults.length;
     snapshots.partialFailureDetails = failedResults;
@@ -475,10 +601,16 @@ async function collectExchangeOi(exchange, options = {}) {
     snapshots.discoveredSymbols = totalDiscoveredSymbols;
     snapshots.discoveredSymbolsList = discoveredSymbolsList;
     snapshots.batchSize = batchSymbols.length;
+    snapshots.allowedBatchSize = allowedBatchSymbols.length;
     snapshots.nextCursorIndex = (cursorIndex + freshSymbols.length) % totalDiscoveredSymbols;
-    if (!snapshots.length && !snapshots.partialFailures) throw new Error("No valid Open Interest values returned for selected USDT contract batch");
+    if (!snapshots.length && !snapshots.partialFailures && (snapshots.initialFilter?.allowed || 0) > 0) {
+      throw new Error("No valid Open Interest values returned for the eligible USDT contract batch");
+    }
   }
-  if (!snapshots.length && !snapshots.partialFailures) throw new Error("No active USDT contract Open Interest values parsed");
+  if (!snapshots.length && !snapshots.partialFailures &&
+      (snapshots.initialFilter?.allowed ?? 1) > 0) {
+    throw new Error("No active USDT contract Open Interest values parsed for the eligible initial-filter universe");
+  }
   return snapshots;
 }
 
@@ -550,6 +682,8 @@ async function collectOpenInterestSnapshots() {
           nextCursorIndex: snapshots.nextCursorIndex ?? null,
           retrySymbols: snapshots.nextRetrySymbols || [],
           failureDetails: snapshots.partialFailureDetails || [],
+          initialFilter: snapshots.initialFilter || null,
+          allowedBatchSize: snapshots.allowedBatchSize ?? null,
           ...(partialFailures ? { error: partialFailures + " symbol requests failed; failed symbols queued for retry" } : {})
         };
       } catch (error) {
