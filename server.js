@@ -2021,7 +2021,7 @@ server.listen(PORT, "0.0.0.0", () => {
     } catch (error) {
       console.error("Full-universe audit auto-start failed:", error?.message || String(error));
     }
-  }, 90000).unref();
+  }, 30000).unref();
   if (oiSnapshotPool) {
     initOiSnapshotDb().then(async ready => {
       console.log(JSON.stringify({ event: "open_interest_snapshot_db", ready, error: oiSnapshotDbError }));
