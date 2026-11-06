@@ -176,8 +176,10 @@ const MAX_BASE_ASSET_PRICE_USD = 30;
 const STABLECOIN_BASE_ASSETS = new Set([
   "USDT", "USDC", "USDE", "USDS", "BUSD", "FDUSD", "TUSD", "USDP", "DAI",
   "PYUSD", "USD1", "USDD", "UST", "USTC", "FRAX", "LUSD", "GUSD", "SUSD",
-  "USDX", "USDK", "EURC", "EURS", "EURT", "EURI", "AEUR", "XAUT0", "USDB",
-  "USDY", "USYC", "CRVUSD", "MIM", "DOLA", "CUSD", "CEUR", "EUSD"
+  "USDX", "USDK", "USDG", "USDJ", "USDU", "USDR", "USDB", "USD0", "USDF",
+  "USDL", "XUSD", "GHO", "CRVUSD", "MIM", "DOLA", "CUSD", "CEUR", "EUSD",
+  "USDY", "USYC", "EURC", "EUROC", "EURS", "EURT", "EURI", "EURCV", "EURQ",
+  "EURA", "AEUR"
 ]);
 function baseAssetFromSymbol(exchange, symbol) {
   if (typeof symbol !== "string") return null;
