@@ -14,8 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
+      - run: npm install
       - run: node --check server.js
       - name: Verify permanent entry-policy guards
         run: |
