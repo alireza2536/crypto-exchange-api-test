@@ -292,6 +292,7 @@ async function collectExchangeOi(exchange, options = {}) {
     if (!snapshots.length) throw new Error("KuCoin returned no explicitly crypto-classified USDT-M open-interest rows");
   } else {
     let symbols = [];
+    let priceBySymbol = new Map();
     if (exchange === "BingX") {
       const [j, tickers] = await Promise.all([
         fetchPublicJson(source),
@@ -299,7 +300,7 @@ async function collectExchangeOi(exchange, options = {}) {
       ]);
       if (!(j?.code === 0 || j?.code === "0") || !Array.isArray(j.data)) throw new Error("BingX contract-list schema/status check failed");
       if (!(tickers?.code === 0 || tickers?.code === "0")) throw new Error("BingX futures ticker price schema/status check failed");
-      const priceBySymbol = priceMapFromRows(tickers.data, "symbol", "lastPrice");
+      priceBySymbol = priceMapFromRows(tickers.data, "symbol", "lastPrice");
       symbols = [...new Set(j.data.filter(row => {
         if (!usdtSymbol(exchange, row?.symbol) || isExplicitTradFiContract(row) || isBingXTradFiSymbol(row?.symbol) ||
             !entryEligible(exchange, row?.symbol, priceBySymbol.get(String(row?.symbol ?? "").toUpperCase()))) return false;
@@ -317,7 +318,7 @@ async function collectExchangeOi(exchange, options = {}) {
       }
       if (!apiTradingSymbols.length) throw new Error("WEEX API-trading catalog returned no symbols; refusing an unverified collection universe");
       const tradfiSymbols = new Set(tradfiCatalog.symbols.map(row => String(row?.symbol ?? "").toUpperCase()).filter(Boolean));
-      const priceBySymbol = priceMapFromRows(tickers, "symbol", "lastPrice");
+      priceBySymbol = priceMapFromRows(tickers, "symbol", "lastPrice");
       const cryptoCatalogSymbols = new Set(j.symbols.filter(row => {
         const symbol = String(row?.symbol ?? "");
         const normalizedSymbol = symbol.toUpperCase();
@@ -372,7 +373,7 @@ async function collectExchangeOi(exchange, options = {}) {
       if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT contract-list schema/status check failed");
       if (plateCatalog?.returnCode !== 0 || !Array.isArray(plateCatalog?.result)) throw new Error("XT official plate catalog schema/status check failed");
       if (tickers?.returnCode !== 0 || !Array.isArray(tickers?.result)) throw new Error("XT all-tickers price schema/status check failed");
-      const priceBySymbol = priceMapFromRows(tickers.result.map(row => ({symbol: row?.s, price: row?.c})), "symbol", "price");
+      priceBySymbol = priceMapFromRows(tickers.result.map(row => ({symbol: row?.s, price: row?.c})), "symbol", "price");
       // XT contract rows include an official `plates` array. Derive the TradFi category IDs
       // dynamically from the official plate catalog rather than maintaining a guessed ticker list.
       const tradfiPlates = plateCatalog.result.filter(row =>
