@@ -127,6 +127,7 @@ jobs:
           node <<'NODE'
           
           const BASE = process.env.BASE_URL || "https://exchange-api-connectivity-test.onrender.com";
+          const NAMES = ["MEXC","BingX","OKX","WEEX","KuCoin","XT"];
           const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
           const nowSec = () => Math.floor(Date.now()/1000);
           function fail(message){throw new Error(message);}
@@ -149,7 +150,7 @@ jobs:
             const names=[row?.baseCoinName,row?.baseCoinNameEn,row?.enName,row?.enDesc,row?.cnName,row?.cnDesc,row?.displayName,row?.description].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase());
             return normalized.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(v))||names.some(v=>/(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(v));
           }
-function isBingXTradFiSymbol(symbol){
+          function isBingXTradFiSymbol(symbol){
             const base=String(symbol??"").split("-")[0].toUpperCase();
             return /^(NCS|NCCO|NCF)/.test(base);
           }
