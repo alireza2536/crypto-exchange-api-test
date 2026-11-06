@@ -51,6 +51,8 @@ async function initOiSnapshotDb() {
         id BIGSERIAL PRIMARY KEY,
         exchange TEXT NOT NULL,
         symbol TEXT NOT NULL,
+        base_asset TEXT,
+        asset_price_usd NUMERIC,
         metric TEXT NOT NULL DEFAULT 'open_interest',
         value NUMERIC NOT NULL CHECK (value > 0),
         collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -58,7 +60,10 @@ async function initOiSnapshotDb() {
         UNIQUE (exchange, symbol, metric, collected_at)
       )
     `);
+    await oiSnapshotPool.query("ALTER TABLE oi_snapshots ADD COLUMN IF NOT EXISTS base_asset TEXT");
+    await oiSnapshotPool.query("ALTER TABLE oi_snapshots ADD COLUMN IF NOT EXISTS asset_price_usd NUMERIC");
     await oiSnapshotPool.query("CREATE INDEX IF NOT EXISTS oi_snapshots_exchange_time_idx ON oi_snapshots (exchange, collected_at DESC)");
+    await oiSnapshotPool.query("CREATE INDEX IF NOT EXISTS oi_snapshots_base_asset_price_idx ON oi_snapshots (base_asset, asset_price_usd)");
     await oiSnapshotPool.query(`
       CREATE TABLE IF NOT EXISTS oi_archive_state (
         singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
@@ -172,7 +177,7 @@ const STABLECOIN_BASE_ASSETS = new Set([
   "USDT", "USDC", "USDE", "USDS", "BUSD", "FDUSD", "TUSD", "USDP", "DAI",
   "PYUSD", "USD1", "USDD", "UST", "USTC", "FRAX", "LUSD", "GUSD", "SUSD",
   "USDX", "USDK", "EURC", "EURS", "EURT", "EURI", "AEUR", "XAUT0", "USDB",
-  "USDY", "USYC", " crvUSD".trim(), "MIM", "DOLA", "CUSD", "CEUR", "EUSD"
+  "USDY", "USYC", "CRVUSD", "MIM", "DOLA", "CUSD", "CEUR", "EUSD"
 ]);
 function baseAssetFromSymbol(exchange, symbol) {
   if (typeof symbol !== "string") return null;
@@ -519,11 +524,11 @@ async function collectOpenInterestSnapshots() {
           const params = [];
           const tuples = batch.map((row, i) => {
             const base = i * 5;
-            params.push(row.exchange, row.symbol, row.metric, row.value, row.source_endpoint);
-            return "($" + (base + 1) + ",$" + (base + 2) + ",$" + (base + 3) + ",$" + (base + 4) + ",$" + (base + 5) + ")";
+            params.push(row.exchange, row.symbol, row.base_asset, row.asset_price_usd, row.metric, row.value, row.source_endpoint);
+            return "($" + (base + 1) + ",$" + (base + 2) + ",$" + (base + 3) + ",$" + (base + 4) + ",$" + (base + 5) + ",$" + (base + 6) + ",$" + (base + 7) + ")";
           });
           const result = await oiSnapshotPool.query(
-            "INSERT INTO oi_snapshots (exchange, symbol, metric, value, source_endpoint) VALUES " + tuples.join(",") + " ON CONFLICT DO NOTHING",
+            "INSERT INTO oi_snapshots (exchange, symbol, base_asset, asset_price_usd, metric, value, source_endpoint) VALUES " + tuples.join(",") + " ON CONFLICT DO NOTHING",
             params
           );
           saved += result.rowCount;
