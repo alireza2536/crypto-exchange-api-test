@@ -1610,7 +1610,6 @@ const server = http.createServer(async (req, res) => {
           const oldest=parsed.length?Math.min(...parsed.map(x=>x.t)):null;
           pageReports.push({page:page+1,rows:parsed.length,uniqueTotal:uniqueNow.length,oldestAt:oldest?new Date(oldest).toISOString():null});
           if(uniqueNow.length>=targetCandles||parsed.length===0||oldest===null)break;
-          
           const nextCursor=oldest-1;
           if(cursor!==null&&nextCursor>=cursor){lastError="Pagination cursor did not move backward";break}
           cursor=nextCursor;
@@ -1880,7 +1879,7 @@ server.listen(PORT, "0.0.0.0", () => {
     const passed = results.filter((item) => item.status === "PASS").length;
     console.log(JSON.stringify({ event: "startup_exchange_probe", finishedAt: new Date().toISOString(), passed, total: results.length, results }));
     await runDataSweep();
-        const deep = await runDeepSweep();
+    const deep = await runDeepSweep();
     console.log(JSON.stringify({
       event: "startup_deep_market_probe",
       finishedAt: deep.finishedAt, passed: deep.passed, notListed: deep.notListed, failed: deep.failed, total: deep.total,
