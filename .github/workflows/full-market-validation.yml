@@ -95,7 +95,6 @@ jobs:
             {exchange:"BingX",url:"https://open-api.bingx.com/openApi/swap/v3/quote/klines?symbol=BTC-USDT&interval=15m&limit=100",rows:j=>(j.data||[]).map(x=>({t:Number(x.time),o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.volume??x.vol)}))},
             {exchange:"OKX",url:"https://www.okx.com/api/v5/market/history-candles?instId=BTC-USDT-SWAP&bar=15m&limit=100",rows:j=>(j.data||[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
             {exchange:"WEEX",url:"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=15m&limit=100",rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
-            {exchange:"HTX",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=15min&size=100",rows:j=>(j.data||[]).map(x=>({t:Number(x.id)*1000,o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.vol??x.amount)}))},
             {exchange:"KuCoin",url:"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=15",rows:j=>(j.data||[]).map(x=>({t:Number(x[0])>1e12?Number(x[0]):Number(x[0])*1000,o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
             {exchange:"XT",url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=15m&limit=100",rows:j=>(j.result||[]).map(x=>({t:Number(x.t),o:Number(x.o),h:Number(x.h),l:Number(x.l),c:Number(x.c),v:Number(x.a??x.v??x.volume)}))}
           ];
@@ -107,7 +106,6 @@ jobs:
                 s.exchange==="MEXC"?(j.success===true||j.code===0):
                 s.exchange==="BingX"?(j.code===0||j.code==="0"):
                 s.exchange==="OKX"?String(j.code)==="0":
-                s.exchange==="HTX"?j.status==="ok":
                 s.exchange==="KuCoin"?String(j.code)==="200000":
                 s.exchange==="XT"?j.returnCode===0:Array.isArray(j)
               );
