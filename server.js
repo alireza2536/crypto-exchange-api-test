@@ -523,7 +523,7 @@ async function collectOpenInterestSnapshots() {
           const batch = snapshots.slice(offset, offset + 100);
           const params = [];
           const tuples = batch.map((row, i) => {
-            const base = i * 5;
+            const base = i * 7;
             params.push(row.exchange, row.symbol, row.base_asset, row.asset_price_usd, row.metric, row.value, row.source_endpoint);
             return "($" + (base + 1) + ",$" + (base + 2) + ",$" + (base + 3) + ",$" + (base + 4) + ",$" + (base + 5) + ",$" + (base + 6) + ",$" + (base + 7) + ")";
           });
