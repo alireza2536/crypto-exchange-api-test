@@ -308,12 +308,13 @@ async function collectExchangeOi(exchange, options = {}) {
         return !status || ["TRADING", "ACTIVE", "ONLINE", "1"].includes(status);
       }).map(row => row.symbol))];
     } else if (exchange === "WEEX") {
-      const [j, tradfiCatalog, apiTradingSymbols] = await Promise.all([
+      const [j, tradfiCatalog, apiTradingSymbols, tickers] = await Promise.all([
         fetchPublicJson(source),
         fetchPublicJson("https://api-contract.weex.com/capi/v3/market/exchangeInfo?contractType=TRADIFI_PERPETUAL"),
-        fetchPublicJson("https://api-contract.weex.com/capi/v3/market/apiTradingSymbols")
+        fetchPublicJson("https://api-contract.weex.com/capi/v3/market/apiTradingSymbols"),
+        fetchPublicJson("https://api-contract.weex.com/capi/v3/market/ticker/24hr")
       ]);
-      if (!Array.isArray(j?.symbols) || !Array.isArray(tradfiCatalog?.symbols) || !Array.isArray(apiTradingSymbols)) {
+      if (!Array.isArray(j?.symbols) || !Array.isArray(tradfiCatalog?.symbols) || !Array.isArray(apiTradingSymbols) || !Array.isArray(tickers)) {
         throw new Error("WEEX contract/API-trading catalog schema check failed");
       }
       if (!apiTradingSymbols.length) throw new Error("WEEX API-trading catalog returned no symbols; refusing an unverified collection universe");
