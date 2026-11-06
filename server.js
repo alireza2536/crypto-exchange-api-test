@@ -167,9 +167,50 @@ function usdtSymbol(exchange, symbol) {
   if (exchange === "XT") return symbol.toLowerCase().endsWith("_usdt");
   return false;
 }
-function toSnapshot(exchange, symbol, value, sourceEndpoint) {
+const MAX_BASE_ASSET_PRICE_USD = 30;
+const STABLECOIN_BASE_ASSETS = new Set([
+  "USDT", "USDC", "USDE", "USDS", "BUSD", "FDUSD", "TUSD", "USDP", "DAI",
+  "PYUSD", "USD1", "USDD", "UST", "USTC", "FRAX", "LUSD", "GUSD", "SUSD",
+  "USDX", "USDK", "EURC", "EURS", "EURT", "EURI", "AEUR", "XAUT0", "USDB",
+  "USDY", "USYC", " crvUSD".trim(), "MIM", "DOLA", "CUSD", "CEUR", "EUSD"
+]);
+function baseAssetFromSymbol(exchange, symbol) {
+  if (typeof symbol !== "string") return null;
+  const value = symbol.toUpperCase();
+  if (exchange === "MEXC" || exchange === "XT") return value.split("_")[0] || null;
+  if (exchange === "BingX" || exchange === "OKX") return value.split("-")[0] || null;
+  if (exchange === "KuCoin") return value.endsWith("USDTM") ? value.slice(0, -5) : null;
+  if (exchange === "WEEX") return value.endsWith("USDT") ? value.slice(0, -4) : null;
+  return null;
+}
+function positivePrice(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+function priceMapFromRows(rows, symbolField, priceField) {
+  const map = new Map();
+  for (const row of rowsFrom(rows)) {
+    const symbol = row?.[symbolField];
+    const price = positivePrice(row?.[priceField]);
+    if (typeof symbol === "string" && price !== null) map.set(symbol.toUpperCase(), price);
+  }
+  return map;
+}
+function entryEligible(exchange, symbol, price) {
+  const baseAsset = baseAssetFromSymbol(exchange, symbol);
+  const currentPrice = positivePrice(price);
+  return Boolean(baseAsset) &&
+    !STABLECOIN_BASE_ASSETS.has(baseAsset) &&
+    currentPrice !== null &&
+    currentPrice <= MAX_BASE_ASSET_PRICE_USD;
+}
+function toSnapshot(exchange, symbol, value, sourceEndpoint, assetPriceUsd) {
   const oi = positiveOi(value);
-  return oi === null ? null : { exchange, symbol, metric: "open_interest_native", value: oi, source_endpoint: sourceEndpoint };
+  const baseAsset = baseAssetFromSymbol(exchange, symbol);
+  const price = positivePrice(assetPriceUsd);
+  return oi === null || !baseAsset || STABLECOIN_BASE_ASSETS.has(baseAsset) || price === null || price > MAX_BASE_ASSET_PRICE_USD
+    ? null
+    : { exchange, symbol, base_asset: baseAsset, asset_price_usd: price, metric: "open_interest_native", value: oi, source_endpoint: sourceEndpoint };
 }
 
 async function collectExchangeOi(exchange, options = {}) {
@@ -190,22 +231,26 @@ async function collectExchangeOi(exchange, options = {}) {
     if (!(tickers?.success === true || tickers?.code === 0) || !(contracts?.success === true || contracts?.code === 0) || !Array.isArray(contracts.data)) {
       throw new Error("MEXC ticker/contract catalog schema check failed");
     }
-    const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [row?.symbol, row]));
+    const tickerBySymbol = new Map(rowsFrom(tickers.data).map(row => [String(row?.symbol ?? "").toUpperCase(), row]));
     for (const contract of contracts.data) {
       const typeLabel = Number(contract?.typeLabel); // Require the official crypto/normal label explicitly; missing classification is not accepted.
       if (Number(contract?.state) !== 0 || contract?.settleCoin !== "USDT" || !usdtSymbol(exchange, contract?.symbol) || typeLabel !== 0 || isExplicitTradFiContract(contract)) continue;
-      const ticker = tickerBySymbol.get(contract.symbol);
-      const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source);
+      const ticker = tickerBySymbol.get(String(contract.symbol).toUpperCase());
+      if (!entryEligible(exchange, contract.symbol, ticker?.lastPrice)) continue;
+      const snap = toSnapshot(exchange, contract.symbol, ticker?.holdVol, source, ticker?.lastPrice);
       if (snap) snapshots.push(snap);
     }
     if (!snapshots.length) throw new Error("MEXC returned no active USDT contract OI values");
   } else if (exchange === "OKX") {
-    const [j, catalog] = await Promise.all([
+    const [j, catalog, tickers] = await Promise.all([
       fetchPublicJson(source),
-      fetchPublicJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP")
+      fetchPublicJson("https://www.okx.com/api/v5/public/instruments?instType=SWAP"),
+      fetchPublicJson("https://www.okx.com/api/v5/market/tickers?instType=SWAP")
     ]);
     if (String(j?.code) !== "0" || !Array.isArray(j.data)) throw new Error("OKX open-interest schema/status check failed");
     if (String(catalog?.code) !== "0" || !Array.isArray(catalog.data)) throw new Error("OKX SWAP instrument catalog schema/status check failed");
+    if (String(tickers?.code) !== "0" || !Array.isArray(tickers.data)) throw new Error("OKX SWAP ticker price schema/status check failed");
+    const priceBySymbol = priceMapFromRows(tickers.data, "instId", "last");
     // OKX exposes the underlying asset category in official instrument metadata:
     // 1 = Crypto, 3 = Stocks, with other categories for non-crypto assets.
     const cryptoSwapIds = new Set(catalog.data
@@ -214,15 +259,21 @@ async function collectExchangeOi(exchange, options = {}) {
       .filter(Boolean));
     if (!cryptoSwapIds.size) throw new Error("OKX instrument catalog returned no instruments explicitly classified as crypto");
     for (const row of j.data) {
-      if (usdtSymbol(exchange, row?.instId) && cryptoSwapIds.has(row.instId)) {
-        const snap = toSnapshot(exchange, row.instId, row.oi, source);
+      const price = priceBySymbol.get(String(row?.instId ?? "").toUpperCase());
+      if (usdtSymbol(exchange, row?.instId) && cryptoSwapIds.has(row.instId) && entryEligible(exchange, row.instId, price)) {
+        const snap = toSnapshot(exchange, row.instId, row.oi, source, price);
         if (snap) snapshots.push(snap);
       }
     }
     if (!snapshots.length) throw new Error("OKX returned no crypto-classified USDT SWAP open-interest values");
   } else if (exchange === "KuCoin") {
-    const j = await fetchPublicJson(source);
+    const [j, tickers] = await Promise.all([
+      fetchPublicJson(source),
+      fetchPublicJson("https://api-futures.kucoin.com/api/v1/allTickers")
+    ]);
     if (String(j?.code) !== "200000" || !Array.isArray(j?.data)) throw new Error("KuCoin official active-contract catalog schema/status check failed");
+    if (String(tickers?.code) !== "200000" || !Array.isArray(tickers?.data)) throw new Error("KuCoin all-futures-tickers price schema/status check failed");
+    const priceBySymbol = priceMapFromRows(tickers.data, "symbol", "price");
     for (const row of j.data) {
       const symbol = row?.symbol;
       const categories = [row?.marketType, row?.assetClass]
@@ -233,17 +284,25 @@ async function collectExchangeOi(exchange, options = {}) {
       if (String(row?.quoteCurrency ?? "").toUpperCase() !== "USDT" ||
           String(row?.settleCurrency ?? "").toUpperCase() !== "USDT" ||
           !usdtSymbol(exchange, symbol)) continue;
-      const snap = toSnapshot(exchange, symbol, row?.openInterest, source);
+      const price = priceBySymbol.get(String(symbol ?? "").toUpperCase());
+      if (!entryEligible(exchange, symbol, price)) continue;
+      const snap = toSnapshot(exchange, symbol, row?.openInterest, source, price);
       if (snap) snapshots.push(snap);
     }
     if (!snapshots.length) throw new Error("KuCoin returned no explicitly crypto-classified USDT-M open-interest rows");
   } else {
     let symbols = [];
     if (exchange === "BingX") {
-      const j = await fetchPublicJson(source);
+      const [j, tickers] = await Promise.all([
+        fetchPublicJson(source),
+        fetchPublicJson("https://open-api.bingx.com/openApi/swap/v2/quote/ticker")
+      ]);
       if (!(j?.code === 0 || j?.code === "0") || !Array.isArray(j.data)) throw new Error("BingX contract-list schema/status check failed");
+      if (!(tickers?.code === 0 || tickers?.code === "0")) throw new Error("BingX futures ticker price schema/status check failed");
+      const priceBySymbol = priceMapFromRows(tickers.data, "symbol", "lastPrice");
       symbols = [...new Set(j.data.filter(row => {
-        if (!usdtSymbol(exchange, row?.symbol) || isExplicitTradFiContract(row) || isBingXTradFiSymbol(row?.symbol)) return false;
+        if (!usdtSymbol(exchange, row?.symbol) || isExplicitTradFiContract(row) || isBingXTradFiSymbol(row?.symbol) ||
+            !entryEligible(exchange, row?.symbol, priceBySymbol.get(String(row?.symbol ?? "").toUpperCase()))) return false;
         const status = String(row?.status ?? "").toUpperCase();
         return !status || ["TRADING", "ACTIVE", "ONLINE", "1"].includes(status);
       }).map(row => row.symbol))];
@@ -258,6 +317,7 @@ async function collectExchangeOi(exchange, options = {}) {
       }
       if (!apiTradingSymbols.length) throw new Error("WEEX API-trading catalog returned no symbols; refusing an unverified collection universe");
       const tradfiSymbols = new Set(tradfiCatalog.symbols.map(row => String(row?.symbol ?? "").toUpperCase()).filter(Boolean));
+      const priceBySymbol = priceMapFromRows(tickers, "symbol", "lastPrice");
       const cryptoCatalogSymbols = new Set(j.symbols.filter(row => {
         const symbol = String(row?.symbol ?? "");
         const normalizedSymbol = symbol.toUpperCase();
@@ -267,7 +327,8 @@ async function collectExchangeOi(exchange, options = {}) {
           usdtSymbol(exchange, symbol) &&
           !tradfiSymbols.has(normalizedSymbol) &&
           (!status || ["TRADING", "OPEN", "1"].includes(status)) &&
-          String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT";
+          String(row?.marginAsset ?? row?.quoteAsset ?? "USDT").toUpperCase() === "USDT" &&
+          entryEligible(exchange, symbol, priceBySymbol.get(normalizedSymbol));
       }).map(row => String(row.symbol).toUpperCase()));
       // WEEX's API-trading list contains a few S-suffixed aliases (e.g. BTCSUSDT)
       // while exchangeInfo and market-data endpoints use canonical symbols (BTCUSDT).
@@ -303,12 +364,15 @@ async function collectExchangeOi(exchange, options = {}) {
         }).length
       }));
     } else if (exchange === "XT") {
-      const [j, plateCatalog] = await Promise.all([
+      const [j, plateCatalog, tickers] = await Promise.all([
         fetchPublicJson(source),
-        fetchPublicJson("https://fapi.xt.com/future/market/v1/public/plate/list")
+        fetchPublicJson("https://fapi.xt.com/future/market/v1/public/plate/list"),
+        fetchPublicJson("https://fapi.xt.com/future/market/v1/public/q/tickers")
       ]);
       if (j?.returnCode !== 0 || !Array.isArray(j.result)) throw new Error("XT contract-list schema/status check failed");
       if (plateCatalog?.returnCode !== 0 || !Array.isArray(plateCatalog?.result)) throw new Error("XT official plate catalog schema/status check failed");
+      if (tickers?.returnCode !== 0 || !Array.isArray(tickers?.result)) throw new Error("XT all-tickers price schema/status check failed");
+      const priceBySymbol = priceMapFromRows(tickers.result.map(row => ({symbol: row?.s, price: row?.c})), "symbol", "price");
       // XT contract rows include an official `plates` array. Derive the TradFi category IDs
       // dynamically from the official plate catalog rather than maintaining a guessed ticker list.
       const tradfiPlates = plateCatalog.result.filter(row =>
@@ -332,7 +396,8 @@ async function collectExchangeOi(exchange, options = {}) {
       symbols = [...new Set(usdtRows.filter(row =>
         Array.isArray(row?.plates) &&
         !row.plates.some(id => tradfiPlateIds.has(Number(id))) &&
-        !isExplicitTradFiContract(row)
+        !isExplicitTradFiContract(row) &&
+        entryEligible(exchange, row?.symbol, priceBySymbol.get(String(row?.symbol ?? "").toUpperCase()))
       ).map(row => row.symbol))];
       console.log(JSON.stringify({
         event: "xt_contract_classification",
@@ -387,7 +452,13 @@ async function collectExchangeOi(exchange, options = {}) {
         if (j?.returnCode !== 0) throw new Error("XT returnCode " + j?.returnCode);
         value = j?.result?.openInterest ?? j?.result?.openInterestUsd;
       }
-      const snapshot = toSnapshot(exchange, symbol, value, endpoint);
+      const price = exchange === "BingX"
+        ? priceBySymbol.get(String(symbol).toUpperCase())
+        : exchange === "WEEX"
+          ? priceBySymbol.get(String(symbol).toUpperCase())
+          : priceBySymbol.get(String(symbol).toUpperCase());
+      if (!entryEligible(exchange, symbol, price)) throw new Error("Base asset excluded by stablecoin/price entry policy or missing ticker price");
+      const snapshot = toSnapshot(exchange, symbol, value, endpoint, price);
       if (!snapshot) throw new Error("Missing or non-positive Open Interest value");
       return snapshot;
     });
