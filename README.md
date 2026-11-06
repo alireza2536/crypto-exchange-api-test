@@ -1,6 +1,6 @@
 # Crypto Exchange API Test
 
-Independent public-market API connectivity checker for MEXC, BingX, OKX, WEEX, HTX, KuCoin, and XT.
+Independent public-market API connectivity checker for MEXC, BingX, OKX, WEEX, KuCoin, and XT.
 
 ## Run locally
 
