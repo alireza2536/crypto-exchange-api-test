@@ -711,7 +711,6 @@ const probes = [
     check: (j) => Array.isArray(j) && j.some((x) => x && x.symbol === "BTCUSDT" && (typeof x.lastPrice === "string" || typeof x.lastPrice === "number")),
   },
   {
-  {
     exchange: "KuCoin",
     url: "https://api-futures.kucoin.com/api/v1/allTickers",
     benchmark: "XBTUSDTM/BTCUSDTM",
