@@ -55,7 +55,7 @@ jobs:
                 const s=JSON.parse(fs.readFileSync("oi-status.json","utf8"));
                 const rows=new Map((s.coverage||[]).map(x=>[x.exchange,x]));
                 const states=new Map((s.collectionState||[]).map(x=>[x.exchange,x]));
-                const exchanges=["MEXC","BingX","OKX","WEEX","KuCoin","XT"];
+                const exchanges=["MEXC","BingX","OKX","WEEX","HTX","KuCoin","XT"];
                 const missing=[];
                 for(const exchange of exchanges){
                   const row=rows.get(exchange), state=states.get(exchange);
@@ -63,19 +63,26 @@ jobs:
                   const observed=Number(row?.unique_symbols_last_65m||0);
                   if(!row||!state||expected<=0||observed<expected)missing.push({exchange,observed,expected});
                 }
+                const failures=Array.isArray(s.lastFailures)?s.lastFailures:[];
+                const databaseOk=s.databaseReady===true&&s.collectionEnabled===true;
+                const noFailures=failures.length===0;
+                const coverageComplete=missing.length===0;
+                const result=databaseOk&&noFailures&&coverageComplete?"PASS":"PARTIAL";
                 console.log(JSON.stringify({
                   event:"oi_coverage_keepalive_audit",
                   at:new Date().toISOString(),
                   databaseReady:s.databaseReady,
                   collectionEnabled:s.collectionEnabled,
+                  databaseOk,
+                  noFailures,
                   lastSaved:s.lastSaved,
-                  lastFailures:s.lastFailures,
+                  lastFailures:failures,
                   coverage:exchanges.map(exchange=>({
                     exchange,
                     observed:Number(rows.get(exchange)?.unique_symbols_last_65m||0),
                     expected:Number(states.get(exchange)?.last_discovered_count||0)
                   })),
-                  result:missing.length?"PARTIAL":"PASS",
+                  result,
                   missing
                 }));
               ' || echo "OI coverage status could not be parsed; keepalive continues"
@@ -87,14 +94,23 @@ jobs:
               node -e '
                 const fs=require("fs");
                 const s=JSON.parse(fs.readFileSync("backup-status.json","utf8"));
+                const backupAt=s.lastBackupAt?Date.parse(s.lastBackupAt):NaN;
+                const ageMinutes=Number.isFinite(backupAt)?(Date.now()-backupAt)/60000:null;
+                const intervalMinutes=Number(s.intervalHours||6)*60;
+                const pruneDisabled=s.pruneEnabled===false&&s.lastResult?.pruneEnabled===false&&Number(s.lastResult?.prunedRecords||0)===0;
+                const backupOk=s.configured===true&&s.databaseReady===true&&s.lastResult?.ok===true&&pruneDisabled&&ageMinutes!==null&&ageMinutes>=-2&&ageMinutes<=intervalMinutes+60;
                 console.log(JSON.stringify({
                   event:"drive_backup_keepalive_audit",
                   at:new Date().toISOString(),
                   configured:s.configured,
                   databaseReady:s.databaseReady,
                   lastBackupAt:s.lastBackupAt,
+                  ageMinutes,
+                  intervalHours:s.intervalHours,
+                  pruneEnabled:s.pruneEnabled,
+                  prunedRecords:s.lastResult?.prunedRecords,
                   lastResult:s.lastResult,
-                  result:s.lastResult?.ok?"PASS":"PENDING"
+                  result:backupOk?"PASS":"PENDING"
                 }));
               ' || echo "Backup status could not be parsed; keepalive continues"
             else
