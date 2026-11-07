@@ -86,7 +86,7 @@ async function initOiSnapshotDb() {
     await oiSnapshotPool.query("ALTER TABLE oi_collection_state ADD COLUMN IF NOT EXISTS retry_symbols TEXT[] NOT NULL DEFAULT '{}'");
     await oiSnapshotPool.query(`
       INSERT INTO oi_collection_state (exchange)
-      VALUES ('MEXC'), ('BingX'), ('OKX'), ('WEEX'), ('HTX'), ('KuCoin'), ('XT')
+      VALUES ('MEXC'), ('BingX'), ('OKX'), ('WEEX'), ('KuCoin'), ('XT')
       ON CONFLICT (exchange) DO NOTHING
     `);
     oiSnapshotDbReady = true;
@@ -556,7 +556,7 @@ async function collectOpenInterestSnapshots() {
   oiSnapshotLastSaved = 0;
   oiSnapshotLastFailures = [];
   try {
-    const exchanges = ["MEXC", "BingX", "OKX", "WEEX", "HTX", "KuCoin", "XT"];
+    const exchanges = ["MEXC", "BingX", "OKX", "WEEX", "KuCoin", "XT"];
     const stateResult = await oiSnapshotPool.query(
       "SELECT exchange, cursor_index, last_bulk_collection_at, retry_symbols FROM oi_collection_state WHERE exchange = ANY($1::text[])",
       [exchanges]
