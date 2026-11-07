@@ -1182,7 +1182,7 @@ async function runProbe(probe) {
       latencyMs: Date.now() - started,
       schemaOk,
       benchmarkSymbol: probe.benchmark || "BTCUSDT",
-      marketCount: Array.isArray(json?.data) ? json.data.length : (Array.isArray(json?.result) ? json.result.length : (json?.tick ? 1 : 0)),
+      marketCount: Array.isArray(json) ? json.length : (Array.isArray(json?.data) ? json.data.length : (Array.isArray(json?.result) ? json.result.length : (Array.isArray(json?.symbols) ? json.symbols.length : (json?.tick ? 1 : 0)))),
       apiCode,
       contentType,
       responseBytes: Buffer.byteLength(raw),
