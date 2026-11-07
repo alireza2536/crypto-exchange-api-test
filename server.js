@@ -773,10 +773,6 @@ const probes = [
     check: (j) => Array.isArray(j) && j.some((x) => x && x.symbol === "BTCUSDT" && (typeof x.lastPrice === "string" || typeof x.lastPrice === "number")),
   },
   {
-    url: "https://api.hbdm.com/linear-swap-ex/market/detail/merged?contract_code=BTC-USDT",
-    check: (j) => j && j.status === "ok" && j.tick && (typeof j.tick.close === "number" || typeof j.tick.close === "string"),
-  },
-  {
     exchange: "KuCoin",
     url: "https://api-futures.kucoin.com/api/v1/allTickers",
     benchmark: "XBTUSDTM/BTCUSDTM",
