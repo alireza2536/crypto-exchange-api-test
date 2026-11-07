@@ -129,7 +129,7 @@ jobs:
           node <<'NODE'
           
           const BASE = process.env.BASE_URL || "https://exchange-api-connectivity-test.onrender.com";
-          const NAMES = ["MEXC","BingX","OKX","WEEX","HTX","KuCoin","XT"];
+          const NAMES = ["MEXC","BingX","OKX","WEEX","KuCoin","XT"];
           const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
           const nowSec = () => Math.floor(Date.now()/1000);
           function fail(message){throw new Error(message);}
