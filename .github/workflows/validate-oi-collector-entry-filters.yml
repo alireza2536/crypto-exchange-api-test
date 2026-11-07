@@ -31,6 +31,9 @@ jobs:
             '/api/v5/market/tickers?instType=SWAP',
             '/api/v1/allTickers',
             '/capi/v3/market/ticker/24hr',
+            '/v2/linear-swap-ex/market/detail/batch_merged',
+            '/linear-swap-api/v1/swap_contract_info',
+            '/linear-swap-api/v1/swap_open_interest',
             '/future/market/v1/public/q/tickers'
           ];
           const missing = required.filter(value => !source.includes(value));
@@ -38,5 +41,5 @@ jobs:
             console.error('Missing entry-policy guard(s):', missing);
             process.exit(1);
           }
-          console.log('All six-exchange entry-policy guards are present.');
+          console.log('All seven-exchange entry-policy guards are present.');
           NODE
