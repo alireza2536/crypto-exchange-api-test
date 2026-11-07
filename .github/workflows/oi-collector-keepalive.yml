@@ -55,7 +55,7 @@ jobs:
                 const s=JSON.parse(fs.readFileSync("oi-status.json","utf8"));
                 const rows=new Map((s.coverage||[]).map(x=>[x.exchange,x]));
                 const states=new Map((s.collectionState||[]).map(x=>[x.exchange,x]));
-                const exchanges=["MEXC","BingX","OKX","WEEX","HTX","KuCoin","XT"];
+                const exchanges=["MEXC","BingX","OKX","WEEX","KuCoin","XT"];
                 const missing=[];
                 for(const exchange of exchanges){
                   const row=rows.get(exchange), state=states.get(exchange);
