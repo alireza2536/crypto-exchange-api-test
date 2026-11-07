@@ -96,7 +96,7 @@ jobs:
             {exchange:"OKX",url:"https://www.okx.com/api/v5/market/history-candles?instId=BTC-USDT-SWAP&bar=15m&limit=100",rows:j=>(j.data||[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
             {exchange:"WEEX",url:"https://api-contract.weex.com/capi/v3/market/historyKlines?symbol=BTCUSDT&interval=15m&limit=100",rows:j=>(Array.isArray(j)?j:[]).map(x=>({t:Number(x[0]),o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
             {exchange:"HTX",url:"https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=BTC-USDT&period=15min&size=100",rows:j=>(j.data||[]).map(x=>({t:Number(x.id)*1000,o:Number(x.open),h:Number(x.high),l:Number(x.low),c:Number(x.close),v:Number(x.vol??x.amount)}))},
-             {exchange:"KuCoin",url:"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=15",rows:j=>(j.data||[]).map(x=>({t:Number(x[0])>1e12?Number(x[0]):Number(x[0])*1000,o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
+            {exchange:"KuCoin",url:"https://api-futures.kucoin.com/api/v1/kline/query?symbol=XBTUSDTM&granularity=15",rows:j=>(j.data||[]).map(x=>({t:Number(x[0])>1e12?Number(x[0]):Number(x[0])*1000,o:Number(x[1]),h:Number(x[2]),l:Number(x[3]),c:Number(x[4]),v:Number(x[5])}))},
             {exchange:"XT",url:"https://fapi.xt.com/future/market/v1/public/q/kline?symbol=btc_usdt&interval=15m&limit=100",rows:j=>(j.result||[]).map(x=>({t:Number(x.t),o:Number(x.o),h:Number(x.h),l:Number(x.l),c:Number(x.c),v:Number(x.a??x.v??x.volume)}))}
           ];
           const results=await Promise.all(specs.map(async s=>{
@@ -107,8 +107,8 @@ jobs:
                 s.exchange==="MEXC"?(j.success===true||j.code===0):
                 s.exchange==="BingX"?(j.code===0||j.code==="0"):
                 s.exchange==="OKX"?String(j.code)==="0":
-                s.exchange==="HTX"?j.status==="ok"&&Array.isArray(j.data):
-                 s.exchange==="KuCoin"?String(j.code)==="200000":s.exchange==="KuCoin"?String(j.code)==="200000":
+                s.exchange==="HTX"?j.status==="ok":
+                s.exchange==="KuCoin"?String(j.code)==="200000":
                 s.exchange==="XT"?j.returnCode===0:Array.isArray(j)
               );
               const rows=s.rows(j).filter(x=>Number.isFinite(x.t)&&[x.o,x.h,x.l,x.c,x.v].every(Number.isFinite)&&x.o>0&&x.c>0&&x.h>=Math.max(x.o,x.c)&&x.l<=Math.min(x.o,x.c)&&x.h>=x.l&&x.v>0);
@@ -141,7 +141,7 @@ jobs:
             if(exchange==="OKX")return symbol.endsWith("-USDT-SWAP");
             if(exchange==="WEEX")return symbol.toUpperCase().endsWith("USDT");
             if(exchange==="HTX")return symbol.endsWith("-USDT");
-             if(exchange==="KuCoin")return symbol.toUpperCase().endsWith("USDTM");
+            if(exchange==="KuCoin")return symbol.toUpperCase().endsWith("USDTM");
             if(exchange==="XT")return symbol.toLowerCase().endsWith("_usdt");
             return false;
           }
@@ -153,12 +153,11 @@ jobs:
             const names=[row?.baseCoinName,row?.baseCoinNameEn,row?.enName,row?.enDesc,row?.cnName,row?.cnDesc,row?.displayName,row?.description].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase());
             return normalized.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(v))||names.some(v=>/(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(v));
           }
-          
-function hasHtxOfficialTradFiLabel(row){
+          function hasHtxOfficialTradFiLabel(row){
             const labels=[...(Array.isArray(row?.labels)?row.labels:[]),...(Array.isArray(row?.tradfi_labels)?row.tradfi_labels:[])].map(v=>String(v??"").trim().toLowerCase().replace(/[\s_-]+/g,""));
             return labels.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy|etf|preipo)$/.test(v));
           }
-function isBingXTradFiSymbol(symbol){
+          function isBingXTradFiSymbol(symbol){
             const base=String(symbol??"").split("-")[0].toUpperCase();
             return /^(NCS|NCCO|NCF)/.test(base);
           }
@@ -289,7 +288,7 @@ function isBingXTradFiSymbol(symbol){
             if(exchange==="OKX")return "https://www.okx.com/api/v5/market/candles?instId="+encoded+"&bar=15m&limit=100";
             if(exchange==="WEEX")return "https://api-contract.weex.com/capi/v3/market/historyKlines?symbol="+encoded+"&interval=15m&limit=100";
             if(exchange==="HTX")return "https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code="+encoded+"&period=15min&size=100";
-             if(exchange==="KuCoin")return "https://api-futures.kucoin.com/api/v1/kline/query?symbol="+encoded+"&granularity=15&from="+(from*1000)+"&to="+(to*1000);
+            if(exchange==="KuCoin")return "https://api-futures.kucoin.com/api/v1/kline/query?symbol="+encoded+"&granularity=15&from="+(from*1000)+"&to="+(to*1000);
             if(exchange==="XT")return "https://fapi.xt.com/future/market/v1/public/q/kline?symbol="+encoded+"&interval=15m&limit=100";
             fail("No candle endpoint for "+exchange);
           }
@@ -302,7 +301,7 @@ function isBingXTradFiSymbol(symbol){
             if(exchange==="OKX")return (j?.data||[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
             if(exchange==="WEEX")return (Array.isArray(j)?j:[]).map(x=>({t:Number(x?.[0]),o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
             if(exchange==="HTX")return (j?.data||[]).map(x=>({t:Number(x?.id)*1000,o:Number(x?.open),h:Number(x?.high),l:Number(x?.low),c:Number(x?.close)}));
-             if(exchange==="KuCoin")return (j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
+            if(exchange==="KuCoin")return (j?.data||[]).map(x=>({t:Number(x?.[0])>1e12?Number(x?.[0]):Number(x?.[0])*1000,o:Number(x?.[1]),h:Number(x?.[2]),l:Number(x?.[3]),c:Number(x?.[4])}));
             if(exchange==="XT")return (j?.result||[]).map(x=>({t:Number(x?.t),o:Number(x?.o),h:Number(x?.h),l:Number(x?.l),c:Number(x?.c)}));
             return [];
           }
@@ -312,7 +311,7 @@ function isBingXTradFiSymbol(symbol){
             if(exchange==="OKX")return String(j?.code)==="0"&&Array.isArray(j?.data);
             if(exchange==="WEEX")return Array.isArray(j);
             if(exchange==="HTX")return j?.status==="ok"&&Array.isArray(j?.data);
-             if(exchange==="KuCoin")return String(j?.code)==="200000"&&Array.isArray(j?.data);
+            if(exchange==="KuCoin")return String(j?.code)==="200000"&&Array.isArray(j?.data);
             if(exchange==="XT")return j?.returnCode===0&&Array.isArray(j?.result);
             return false;
           }
