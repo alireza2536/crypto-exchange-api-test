@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 119
     steps:
-      - name: Keep Render awake and audit seven-exchange coverage
+      - name: Keep Render awake and audit six-exchange coverage
         env:
           HEALTH_URL: https://exchange-api-connectivity-test.onrender.com/health?source=github-actions
           STATUS_URL: https://exchange-api-connectivity-test.onrender.com/api/open-interest-status
