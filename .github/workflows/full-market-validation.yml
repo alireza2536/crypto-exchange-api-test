@@ -1,4 +1,4 @@
-name: Full seven-exchange market validation
+name: Full six-exchange market validation
 
 on:
   push:
@@ -70,11 +70,11 @@ jobs:
             }))
           }));
           let ok=true;
-          if(endpoint.startsWith("api/history-depth-")) ok=b.historyReadyCount===7;
-          if(endpoint==="api/history-depth-test") ok=b.historyReadyCount===7;
+          if(endpoint.startsWith("api/history-depth-")) ok=b.historyReadyCount===6;
+          if(endpoint==="api/history-depth-test") ok=b.historyReadyCount===6;
           if(endpoint==="api/deep-test") {
             const funding=(b.results||[]).filter(x=>x.kind==="funding_rate");
-            ok=funding.length===7&&funding.every(x=>x.status==="PASS");
+            ok=funding.length===6&&funding.every(x=>x.status==="PASS");
           }
           if(!ok)process.exit(2);
           NODE
@@ -87,7 +87,7 @@ jobs:
           echo "Historical/deep test failure count: $failures"
           if [ "$failures" -ne 0 ]; then exit 1; fi
 
-      - name: Validate 15-minute volume and calculate VWAP for all seven exchanges
+      - name: Validate 15-minute volume and calculate VWAP for all six exchanges
         run: |
           node <<'NODE'
           const specs=[
@@ -116,7 +116,7 @@ jobs:
               return {exchange:s.exchange,status:schemaOk&&rows.length>=30&&Number.isFinite(vwap)?"PASS":"FAIL",httpStatus:r.status,validVolumeBars:rows.length,totalVolume,vwap:Number.isFinite(vwap)?Number(vwap.toFixed(10)):null,latestBarAt:rows.length?new Date(Math.max(...rows.map(x=>x.t))).toISOString():null,error:!schemaOk?"API response/schema failed":rows.length<30?"Fewer than 30 valid OHLCV bars":totalVolume<=0?"Volume sum is not positive":null};
             }catch(e){return {exchange:s.exchange,status:"FAIL",error:String(e.message||e)}}
           }));
-          console.log(JSON.stringify({event:"seven_exchange_15m_volume_vwap_test",at:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results},null,2));
+          console.log(JSON.stringify({event:"six_exchange_15m_volume_vwap_test",at:new Date().toISOString(),passed:results.filter(x=>x.status==="PASS").length,total:results.length,results},null,2));
           if(results.some(x=>x.status!=="PASS"))process.exit(1);
           NODE
 
@@ -236,13 +236,6 @@ jobs:
                 return cryptoSymbols.has(canonical)?canonical:upper;
               }).filter(Boolean));
               return {symbols:[...new Set(candidates.map(r=>String(r.symbol)).filter(s=>cryptoSymbols.has(s.toUpperCase())&&apiTradable.has(s.toUpperCase())))],unclassified};
-            }
-              const j=(await fetchJson("https://api.hbdm.com/linear-swap-api/v1/swap_contract_info",exchange)).json;
-              const candidates=j.data.filter(r=>{
-                const quote=String(r?.settle_currency??r?.quote_currency??"").toUpperCase();
-                return usdtSymbol(exchange,r?.contract_code)&&(!quote||quote==="USDT")&&Number(r?.contract_status)===1;
-              });
-              const unclassified=candidates.filter(r=>!Array.isArray(r?.tradfi_labels)).length;
             }
             if(exchange==="KuCoin"){
               const j=(await fetchJson("https://api-futures.kucoin.com/api/v1/contracts/active",exchange)).json;
@@ -371,7 +364,7 @@ jobs:
             });
             const oiOk=oi?.databaseReady===true&&oi?.collectionEnabled===true&&
               Array.isArray(oi?.lastFailures)&&oi.lastFailures.length===0&&
-              oiRows.length===7&&oiRows.every(x=>x.pass);
+              oiRows.length===6&&oiRows.every(x=>x.pass);
             const backupAt=backup?.lastBackupAt?Date.parse(backup.lastBackupAt):NaN;
             const backupAgeMinutes=Number.isFinite(backupAt)?(Date.now()-backupAt)/60000:null;
             const intervalMinutes=Number(backup?.intervalHours||6)*60;
