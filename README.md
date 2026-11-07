@@ -16,8 +16,8 @@ Open `http://localhost:3000`.
 
 - `GET /` — Persian test dashboard
 - `GET /health` — health check
-- `GET /api/test` — runs all seven public GET probes concurrently and returns JSON
-- On every service start/deploy, the same seven probes run automatically and their structured results are written to Render application logs
+- `GET /api/test` — runs all six public GET probes concurrently and returns JSON
+- On every service start/deploy, the same six probes run automatically and their structured results are written to Render application logs
 
 No API keys or account credentials are used. Each request has a 15-second timeout. Probes run concurrently.
 
