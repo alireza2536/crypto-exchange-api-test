@@ -146,12 +146,12 @@ jobs:
             const xtNonCryptoPlateIds=new Set([31,32,35,39,41,42]);
             if(Array.isArray(row?.plates)&&row.plates.some(id=>xtNonCryptoPlateIds.has(Number(id))))return true;
             const fields=[row?.assetClass,row?.asset_class,row?.assetType,row?.asset_type,row?.baseAssetType,row?.baseAssetSubType,row?.base_asset_type,row?.base_asset_sub_type,row?.marketType,row?.market_type,row?.businessType,row?.business_type,row?.productType,row?.product_type,row?.category,row?.symbolType,row?.symbol_type,row?.instrumentType,row?.instrument_type,row?.underlyingType,row?.underlying_type];
-            const normalized=fields.filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase().replace(/[\s_-]+/g,""));
+            const normalized=fields.filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase().replace(/[\\s_-]+/g,""));
             const names=[row?.baseCoinName,row?.baseCoinNameEn,row?.enName,row?.enDesc,row?.cnName,row?.cnDesc,row?.displayName,row?.description].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="").map(v=>String(v).trim().toLowerCase());
-            return normalized.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(v))||names.some(v=>/(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(v));
-          }
-            const labels=[...(Array.isArray(row?.labels)?row.labels:[]),...(Array.isArray(row?.tradfi_labels)?row.tradfi_labels:[])].map(v=>String(v??"").trim().toLowerCase().replace(/[\s_-]+/g,""));
-            return labels.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy|etf|preipo)$/.test(v));
+            const labels=[...(Array.isArray(row?.labels)?row.labels:[]),...(Array.isArray(row?.tradfi_labels)?row.tradfi_labels:[])].map(v=>String(v??"").trim().toLowerCase().replace(/[\\s_-]+/g,""));
+            return normalized.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy)$/.test(v))||
+              names.some(v=>/(stock|equity|share|forex|commodity|commodities|indices|index|metal|metals|gold|silver|crude|oil|natural gas|sp500|s&p|nasdaq|dow jones|nikkei|jp225|us30)/i.test(v))||
+              labels.some(v=>/^(tradfi|traditionalfinance|stock|stocks|equity|equities|forex|fx|commodity|commodities|index|indices|metal|metals|energy|etf|preipo)$/.test(v));
           }
           function isBingXTradFiSymbol(symbol){
             const base=String(symbol??"").split("-")[0].toUpperCase();
